@@ -48,7 +48,31 @@ def validate_game_flow() -> None:
         save_data.SAVE_PATH = Path(temp_dir) / "save_data.json"
         from game import Game
 
+        save_data.write_save(
+            {
+                "version": 4,
+                "global_tuning": [],
+                "level_tuning": {"1": {"resources": [], "units": "bad", "enemies": None}},
+                "accounts": {
+                    "invalid": "bad",
+                    "recoverable": {
+                        "coins": "not-a-number",
+                        "completed_levels": 12,
+                        "unlocked_level": None,
+                        "selected_level": {},
+                        "owned_units": None,
+                        "unit_upgrades": [],
+                        "oil_capacity_level": "bad",
+                        "loadout": 3,
+                    },
+                },
+                "active_account": "recoverable",
+            }
+        )
         game = Game()
+        assert game.active_account == "recoverable"
+        assert game.coins == 0 and game.unlocked_level == 1
+        assert game._button_rect("close_info").bottom < 210
         for level in LEVELS:
             game.selected_level = level.number
             game._apply_level_tuning(level.number)

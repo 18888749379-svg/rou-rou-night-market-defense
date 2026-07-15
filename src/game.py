@@ -55,6 +55,26 @@ from settings import (
 )
 
 
+def _as_dict(value: object) -> dict:
+    return value if isinstance(value, dict) else {}
+
+
+def _safe_int(value: object, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError):
+        return default
+
+
+def _is_finite_number(value: object) -> bool:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return False
+    try:
+        return math.isfinite(float(value))
+    except OverflowError:
+        return False
+
+
 @dataclass
 class Card:
     unit_type: str
@@ -306,9 +326,9 @@ class Game:
         self.cards = self._make_cards()
 
     def _apply_saved_data(self, data: dict) -> None:
-        tuning = data.get("global_tuning", data.get("tuning", {}))
-        saved_levels = data.get("level_tuning", {})
-        if isinstance(saved_levels, dict) and saved_levels:
+        tuning = _as_dict(data.get("global_tuning", data.get("tuning", {})))
+        saved_levels = _as_dict(data.get("level_tuning", {}))
+        if saved_levels:
             self.level_tuning = {
                 str(level.number): self._build_level_profile(saved_levels.get(str(level.number), {}))
                 for level in LEVELS
@@ -319,17 +339,17 @@ class Game:
                 str(level.number): self._copy_level_profile(migrated) for level in LEVELS
             }
         self._apply_level_tuning(1)
-        audio = tuning.get("audio", {})
+        audio = _as_dict(tuning.get("audio", {}))
         if isinstance(audio.get("music_enabled"), bool):
             self.audio.music_enabled = audio["music_enabled"]
         if isinstance(audio.get("sfx_enabled"), bool):
             self.audio.sfx_enabled = audio["sfx_enabled"]
-        if isinstance(audio.get("music_volume"), (int, float)):
+        if _is_finite_number(audio.get("music_volume")):
             self.audio.set_music_volume(audio["music_volume"])
-        if isinstance(audio.get("sfx_volume"), (int, float)):
+        if _is_finite_number(audio.get("sfx_volume")):
             self.audio.set_sfx_volume(audio["sfx_volume"])
-        for key, value in audio.get("effect_volumes", {}).items():
-            if key in self.audio.effect_volumes and isinstance(value, (int, float)):
+        for key, value in _as_dict(audio.get("effect_volumes", {})).items():
+            if key in self.audio.effect_volumes and _is_finite_number(value):
                 self.audio.set_effect_volume(key, value)
 
         if data.get("version") == 1 or ("progress" in data and "accounts" not in data):
@@ -337,31 +357,35 @@ class Game:
             self.accounts = {"本地玩家": self._new_account(progress)}
             self.active_account = "本地玩家"
         else:
-            accounts = data.get("accounts", {})
-            self.accounts = accounts if isinstance(accounts, dict) else {}
+            accounts = _as_dict(data.get("accounts", {}))
+            self.accounts = {
+                name: account
+                for name, account in accounts.items()
+                if isinstance(name, str) and isinstance(account, dict)
+            }
             active = data.get("active_account")
             self.active_account = active if isinstance(active, str) and active in self.accounts else None
         self._load_active_account()
 
     def _build_level_profile(self, values: dict) -> dict:
-        values = values if isinstance(values, dict) else {}
+        values = _as_dict(values)
         resources = dict(self.factory_resource_settings)
-        for attr, value in values.get("resources", {}).items():
-            if attr in resources and isinstance(value, (int, float)):
+        for attr, value in _as_dict(values.get("resources", {})).items():
+            if attr in resources and _is_finite_number(value):
                 resources[attr] = value
         units = {key: dict(stats) for key, stats in self.factory_unit_stats.items()}
-        for key, saved in values.get("units", {}).items():
+        for key, saved in _as_dict(values.get("units", {})).items():
             if key not in units or not isinstance(saved, dict):
                 continue
             for attr, value in saved.items():
-                if attr in units[key] and isinstance(value, (int, float)):
+                if attr in units[key] and _is_finite_number(value):
                     units[key][attr] = value
         enemies = {key: dict(stats) for key, stats in self.factory_enemy_stats.items()}
-        for key, saved in values.get("enemies", {}).items():
+        for key, saved in _as_dict(values.get("enemies", {})).items():
             if key not in enemies or not isinstance(saved, dict):
                 continue
             for attr, value in saved.items():
-                if attr in enemies[key] and isinstance(value, (int, float)):
+                if attr in enemies[key] and _is_finite_number(value):
                     enemies[key][attr] = value
         return {"resources": resources, "units": units, "enemies": enemies}
 
@@ -400,15 +424,16 @@ class Game:
         self._apply_account_upgrades()
 
     def _new_account(self, progress: dict | None = None) -> dict:
-        progress = progress or {}
+        progress = _as_dict(progress)
+        completed_values = progress.get("completed_levels", [])
+        if not isinstance(completed_values, list):
+            completed_values = []
         completed = [
-            value for value in progress.get("completed_levels", [])
-            if isinstance(value, int) and 1 <= value <= len(LEVELS)
+            value for value in completed_values
+            if isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= len(LEVELS)
         ]
-        unlocked = progress.get("unlocked_level", 1)
-        unlocked = unlocked if isinstance(unlocked, int) else 1
-        selected = progress.get("selected_level", unlocked)
-        selected = selected if isinstance(selected, int) else unlocked
+        unlocked = _safe_int(progress.get("unlocked_level", 1), 1)
+        selected = _safe_int(progress.get("selected_level", unlocked), unlocked)
         return {
             "coins": 0,
             "unlocked_level": max(1, min(len(LEVELS), unlocked)),
@@ -434,29 +459,40 @@ class Game:
             self._apply_level_tuning(self.selected_level)
             return
         account = self.accounts[self.active_account]
-        self.coins = max(0, int(account.get("coins", 0)))
+        self.coins = max(0, _safe_int(account.get("coins", 0)))
         completed = account.get("completed_levels", [])
+        if not isinstance(completed, list):
+            completed = []
         self.completed_levels = {
-            int(level) for level in completed if isinstance(level, int) and 1 <= level <= len(LEVELS)
+            int(level)
+            for level in completed
+            if isinstance(level, int) and not isinstance(level, bool) and 1 <= level <= len(LEVELS)
         }
         derived_unlock = min(len(LEVELS), max(self.completed_levels, default=0) + 1)
-        self.unlocked_level = max(1, min(len(LEVELS), int(account.get("unlocked_level", 1))))
+        self.unlocked_level = max(1, min(len(LEVELS), _safe_int(account.get("unlocked_level", 1), 1)))
         self.unlocked_level = max(self.unlocked_level, derived_unlock)
-        self.selected_level = max(1, min(self.unlocked_level, int(account.get("selected_level", self.unlocked_level))))
+        self.selected_level = max(
+            1,
+            min(self.unlocked_level, _safe_int(account.get("selected_level", self.unlocked_level), self.unlocked_level)),
+        )
         owned = account.get("owned_units", DEFAULT_OWNED_UNITS)
+        if not isinstance(owned, list):
+            owned = DEFAULT_OWNED_UNITS
         self.owned_units = [key for key in UNIT_ORDER if key in owned]
         for key in DEFAULT_OWNED_UNITS:
             if key not in self.owned_units:
                 self.owned_units.append(key)
-        saved_upgrades = account.get("unit_upgrades", {})
+        saved_upgrades = _as_dict(account.get("unit_upgrades", {}))
         self.unit_upgrades = {
-            key: max(0, min(len(UPGRADE_COSTS), int(saved_upgrades.get(key, 0)))) for key in UNIT_ORDER
+            key: max(0, min(len(UPGRADE_COSTS), _safe_int(saved_upgrades.get(key, 0)))) for key in UNIT_ORDER
         }
         self.oil_capacity_level = max(
             0,
-            min(len(OIL_CAPACITY_UPGRADE_COSTS), int(account.get("oil_capacity_level", 0))),
+            min(len(OIL_CAPACITY_UPGRADE_COSTS), _safe_int(account.get("oil_capacity_level", 0))),
         )
         saved_loadout = account.get("loadout", DEFAULT_OWNED_UNITS)
+        if not isinstance(saved_loadout, list):
+            saved_loadout = DEFAULT_OWNED_UNITS
         self.saved_loadout = [key for key in saved_loadout if key in self.owned_units][:MAX_LOADOUT_SIZE]
         if not self.saved_loadout:
             self.saved_loadout = ["charcoal"]
@@ -2256,7 +2292,7 @@ class Game:
         if name == "tuning":
             return pygame.Rect(WIDTH - 90, 18, 70, 36)
         if name == "close_info":
-            return pygame.Rect(WIDTH // 2 - 70, 594, 140, 46)
+            return pygame.Rect(1270, 98, 120, 42)
         if name == "close_tuning":
             return pygame.Rect(WIDTH // 2 - 70, 594, 140, 46)
         if name == "restart":
