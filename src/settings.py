@@ -35,6 +35,8 @@ CHARCOAL_UNIT_COOLDOWN = 8.0
 OIL_BOTTLE_PRICE = 100
 OIL_CAPACITY_UPGRADE_COSTS = [150, 250, 400]
 MAX_OIL_CAPACITY = 6
+ENDING_ANIMATION_DURATION = 3.2
+EGG_MINE_DEPLOY_HP = 1
 
 REVERSE_STARTING_CHARCOAL = 180
 REVERSE_DURATION = 120.0
@@ -116,6 +118,20 @@ UNITS: dict[str, UnitConfig] = {
     "scallop": UnitConfig("scallop", "蒜香扇贝", 125, 105, 24, 1.4, "scallop.png", "发射蒜蓉弹，命中后会对目标附近的僵尸造成溅射伤害。"),
     "sausage": UnitConfig("sausage", "辣椒烤肠", 175, 110, 45, 2.6, "sausage.png", "喷出穿透整行的辣椒火焰，可同时灼伤多个僵尸。"),
     "lotus": UnitConfig("lotus", "糯米藕盒", 100, 260, 0, 6.0, "lotus.png", "周期治疗上下左右相邻肉肉，每次恢复 35 点生命。"),
+}
+
+# Placement cadence is independent from each unit's attack or production interval.
+UNIT_PLACEMENT_COOLDOWNS: dict[str, float] = {
+    "charcoal": 3.0,
+    "skewer": 5.0,
+    "beef": 6.0,
+    "wing": 7.0,
+    "scallop": 7.0,
+    "lotus": 8.0,
+    "meatball": 8.0,
+    "egg_mine": 8.0,
+    "sausage": 8.0,
+    "wall": 15.0,
 }
 
 UNIT_ORDER = [

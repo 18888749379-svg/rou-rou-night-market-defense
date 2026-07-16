@@ -18,6 +18,8 @@ from settings import (
     ENEMIES,
     ENEMY_ORDER,
     CELL_SIZE,
+    EGG_MINE_DEPLOY_HP,
+    ENDING_ANIMATION_DURATION,
     GRID_X,
     GRID_Y,
     IMAGE_DIR,
@@ -27,6 +29,7 @@ from settings import (
     REVERSE_ZOMBIE_COSTS,
     UNITS,
     UNIT_ORDER,
+    UNIT_PLACEMENT_COOLDOWNS,
 )
 
 
@@ -35,6 +38,11 @@ def validate_configuration() -> None:
     assert len(LEVEL_COIN_REWARDS) == len(LEVELS)
     assert set(UNIT_ORDER) == set(UNITS)
     assert set(ENEMY_ORDER) == set(ENEMIES)
+    assert set(UNIT_PLACEMENT_COOLDOWNS) == set(UNITS)
+    assert UNIT_PLACEMENT_COOLDOWNS["charcoal"] == 3.0
+    assert UNIT_PLACEMENT_COOLDOWNS["wall"] == 15.0
+    assert (IMAGE_DIR / "ending_victory.png").is_file()
+    assert (IMAGE_DIR / "ending_defeat.png").is_file()
 
     for config in (*UNITS.values(), *ENEMIES.values()):
         assert (IMAGE_DIR / config.image).is_file(), f"missing image: {config.image}"
@@ -54,6 +62,7 @@ def validate_configuration() -> None:
 def validate_game_flow() -> None:
     with tempfile.TemporaryDirectory(prefix="rou_rou_defense_") as temp_dir:
         save_data.SAVE_PATH = Path(temp_dir) / "save_data.json"
+        from entities import Enemy, Unit
         from game import Game
 
         save_data.write_save(
@@ -108,6 +117,8 @@ def validate_game_flow() -> None:
                 game.reverse_core_hp = 1
                 game.enemies[0].x = -100
                 game.update(0.0)
+                assert game.state == "ending"
+                game.update(ENDING_ANIMATION_DURATION + 0.1)
                 assert game.state == "win"
                 continue
             game.game_time = 1000.0
@@ -116,7 +127,54 @@ def validate_game_flow() -> None:
             for enemy in list(game.enemies):
                 enemy.take_damage(enemy.hp, game)
             game.update(0.0)
+            assert game.state == "ending", level.number
+            game.update(ENDING_ANIMATION_DURATION + 0.1)
             assert game.state == "win", level.number
+
+        game.selected_level = 1
+        game._apply_level_tuning(1)
+        game.reset_game()
+        game.state = "playing"
+        game.charcoal = 999
+        game._select_unit("charcoal")
+        game.try_place(0, 0)
+        assert game.card_cooldowns["charcoal"] == UNIT_PLACEMENT_COOLDOWNS["charcoal"]
+        game._select_unit("charcoal")
+        assert game.selected_unit is None
+        game.update(UNIT_PLACEMENT_COOLDOWNS["charcoal"] + 0.1)
+        assert game.card_cooldowns["charcoal"] == 0.0
+
+        mine = Unit("egg_mine", 1, 3)
+        assert not mine.deployed and mine.hp == EGG_MINE_DEPLOY_HP
+        mine.update(mine.config.cooldown - 0.1, game)
+        assert not mine.deployed and mine.alive
+        mine.update(0.2, game)
+        assert mine.deployed and mine.hp == mine.config.hp
+        target = Enemy("normal", 1)
+        target.x = mine.rect.centerx
+        target.rect.centerx = int(target.x)
+        game.enemies = [target]
+        mine.update(0.01, game)
+        assert mine.triggered and not mine.alive
+        assert target.hp < target.max_hp
+
+        game.reset_game()
+        game.state = "playing"
+        game._open_exit_confirm()
+        assert game.exit_confirm and game.paused
+        game.draw()
+        game._close_exit_confirm()
+        assert not game.exit_confirm and not game.paused
+        game._begin_ending("lose")
+        game.ending_timer = ENDING_ANIMATION_DURATION * 0.55
+        game.draw()
+        game.update(ENDING_ANIMATION_DURATION)
+        assert game.state == "lose"
+        game.draw()
+        game.state = "playing"
+        game._open_exit_confirm()
+        game._exit_to_menu()
+        assert game.state == "menu"
 
         game.state = "menu"
         game.draw()

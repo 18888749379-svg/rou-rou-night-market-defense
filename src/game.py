@@ -30,6 +30,7 @@ from settings import (
     COLORS,
     DEFAULT_OWNED_UNITS,
     DEFENSE_LINE_X,
+    ENDING_ANIMATION_DURATION,
     ENEMIES,
     ENEMY_ORDER,
     FPS,
@@ -60,6 +61,7 @@ from settings import (
     UNITS,
     UNIT_ORDER,
     UNIT_COIN_PRICES,
+    UNIT_PLACEMENT_COOLDOWNS,
     UPGRADE_COSTS,
     WIDTH,
 )
@@ -287,6 +289,11 @@ class Game:
         self.tongs_image = load_image("tongs.png", (66, 58))
         self.oil_image = load_image("oil_bottle.png", (64, 64))
         self.roulette_image = load_image("roulette_wheel.png", (200, 200))
+        self.ending_images = {
+            "win": self._load_cover_image("ending_victory.png"),
+            "lose": self._load_cover_image("ending_defeat.png"),
+        }
+        self.coin_image = load_image("coin.png", (48, 48))
         self.card_images = {key: load_image(config.image, (56, 56)) for key, config in UNITS.items()}
         self.enemy_card_images = {key: load_image(config.image, (58, 68)) for key, config in ENEMIES.items()}
         self.cards = self._make_cards()
@@ -294,6 +301,15 @@ class Game:
         self.reset_game()
         self._save_all()
         self.audio.play_music("menu")
+
+    @staticmethod
+    def _load_cover_image(name: str) -> pygame.Surface:
+        image = load_image(name)
+        scale = max(WIDTH / image.get_width(), HEIGHT / image.get_height())
+        size = (math.ceil(image.get_width() * scale), math.ceil(image.get_height() * scale))
+        scaled = pygame.transform.smoothscale(image, size)
+        crop = pygame.Rect((size[0] - WIDTH) // 2, (size[1] - HEIGHT) // 2, WIDTH, HEIGHT)
+        return scaled.subsurface(crop).copy()
 
     def _make_cards(self) -> list[Card]:
         if hasattr(self, "level_config") and self.level_config.special in {"roulette", "reverse"}:
@@ -366,6 +382,12 @@ class Game:
         self.reverse_next_hot_lane = self.reverse_hot_interval
         self.shake_timer = 0.0
         self.shake_intensity = 0
+        self.card_cooldowns = {key: 0.0 for key in UNITS}
+        self.exit_confirm = False
+        self.exit_was_paused = False
+        self.ending_result: str | None = None
+        self.ending_timer = 0.0
+        self.level_reward = 0
         self.final_wave_started = False
         self.final_wave_timer = 0.0
         self.paused = False
@@ -671,6 +693,10 @@ class Game:
                     self.audio.play("click")
 
     def _handle_key(self, key: int) -> None:
+        if self.state == "ending":
+            if key in {pygame.K_ESCAPE, pygame.K_RETURN, pygame.K_SPACE}:
+                self._finish_ending()
+            return
         if self.state == "login":
             if key == pygame.K_ESCAPE:
                 self._close_login()
@@ -702,6 +728,10 @@ class Game:
                 self.state = "menu"
                 self.show_info = False
             return
+        if self.state == "playing" and self.exit_confirm:
+            if key == pygame.K_ESCAPE:
+                self._close_exit_confirm()
+            return
         if self.state == "playing" and self.show_info:
             if key in {pygame.K_ESCAPE, pygame.K_i}:
                 self.show_info = False
@@ -716,7 +746,7 @@ class Game:
                     self.message = "已取消当前操作"
                     self.message_timer = 1.0
                 else:
-                    self.paused = not self.paused
+                    self._open_exit_confirm()
                 return
             if self.state in {"win", "lose"}:
                 if self.state == "win":
@@ -803,6 +833,13 @@ class Game:
         return had_active
 
     def _select_unit(self, unit_type: str) -> None:
+        remaining = self.card_cooldowns.get(unit_type, 0.0)
+        if self.level_config.special != "roulette" and remaining > 0:
+            self.selected_unit = None
+            self.message = f"{UNITS[unit_type].name}还需冷却 {remaining:.1f} 秒"
+            self.message_timer = 1.4
+            self.audio.play("bad")
+            return
         if self.selected_unit == unit_type and not self.remove_mode and not self.ultimate_mode:
             self.selected_unit = None
             return
@@ -817,6 +854,10 @@ class Game:
         self.ultimate_mode = False
 
     def _handle_click(self, pos: tuple[int, int]) -> None:
+        if self.state == "ending":
+            if self.ending_timer >= 0.65:
+                self._finish_ending()
+            return
         if self.state == "menu":
             for index, level in enumerate(LEVELS):
                 if self._level_rect(index).collidepoint(pos):
@@ -938,6 +979,12 @@ class Game:
                 return
         if self.state != "playing":
             return
+        if self.exit_confirm:
+            if self._button_rect("exit_confirm_yes").collidepoint(pos):
+                self._exit_to_menu()
+            elif self._button_rect("exit_confirm_no").collidepoint(pos):
+                self._close_exit_confirm()
+            return
         if self.show_info:
             if self._button_rect("close_info").collidepoint(pos):
                 self.show_info = False
@@ -954,6 +1001,9 @@ class Game:
             return
         if self._button_rect("restart_play").collidepoint(pos):
             self.start_game()
+            return
+        if self._button_rect("exit_play").collidepoint(pos):
+            self._open_exit_confirm()
             return
         if self._button_rect("info").collidepoint(pos):
             self.show_info = True
@@ -1037,6 +1087,47 @@ class Game:
         self.state = "playing"
         self.audio.play_music("game")
         self.audio.play("click")
+
+    def _open_exit_confirm(self) -> None:
+        if self.state != "playing" or self.exit_confirm:
+            return
+        self.exit_was_paused = self.paused
+        self.exit_confirm = True
+        self.paused = True
+        self._cancel_action_modes()
+        self.audio.play("click")
+
+    def _close_exit_confirm(self) -> None:
+        self.exit_confirm = False
+        self.paused = self.exit_was_paused
+        self.audio.play("click")
+
+    def _exit_to_menu(self) -> None:
+        self.exit_confirm = False
+        self.paused = False
+        self._save_all()
+        self.state = "menu"
+        self.audio.play_music("menu")
+        self.audio.play("click")
+
+    def _begin_ending(self, result: str) -> None:
+        if self.state != "playing" or result not in {"win", "lose"}:
+            return
+        self.ending_result = result
+        self.ending_timer = 0.0
+        self.exit_confirm = False
+        self.paused = False
+        self._cancel_action_modes()
+        if result == "win":
+            self._complete_current_level()
+        else:
+            self.level_reward = 0
+        self.state = "ending"
+        self.audio.play(result)
+
+    def _finish_ending(self) -> None:
+        if self.state == "ending" and self.ending_result in {"win", "lose"}:
+            self.state = self.ending_result
 
     def _select_level(self, level_number: int) -> None:
         level_number = max(1, min(len(LEVELS), level_number))
@@ -1223,6 +1314,11 @@ class Game:
             return
         config = UNITS[self.selected_unit]
         free_roulette = self.level_config.special == "roulette"
+        remaining = self.card_cooldowns.get(self.selected_unit, 0.0)
+        if not free_roulette and remaining > 0:
+            self.reject(row, col, f"卡片还需冷却 {remaining:.1f} 秒")
+            self.selected_unit = None
+            return
         if not free_roulette and self.charcoal < config.cost:
             self.reject(row, col, "炭火值不足")
             return
@@ -1234,6 +1330,7 @@ class Game:
         self.units.append(unit)
         if not free_roulette:
             self.charcoal -= config.cost
+            self.card_cooldowns[placed_type] = UNIT_PLACEMENT_COOLDOWNS[placed_type]
         self._complete_order_if_matched(placed_type, unit.rect.centerx, unit.rect.top)
         self.selected_unit = None
         self.audio.play("place")
@@ -1498,9 +1595,18 @@ class Game:
         return False
 
     def update(self, dt: float) -> None:
+        if self.state == "ending":
+            self.ending_timer += dt
+            if self.shake_timer > 0:
+                self.shake_timer = max(0.0, self.shake_timer - dt)
+            if self.ending_timer >= ENDING_ANIMATION_DURATION:
+                self._finish_ending()
+            return
         if self.state != "playing" or self.paused or self.show_info or self.show_tuning:
             return
         self.game_time += dt
+        for key, remaining in self.card_cooldowns.items():
+            self.card_cooldowns[key] = max(0.0, remaining - dt)
         if self.level_config.special == "roulette":
             self._update_roulette(dt)
         elif not self.is_reverse_mode:
@@ -1558,13 +1664,10 @@ class Game:
             return
         for enemy in self.enemies:
             if enemy.x <= DEFENSE_LINE_X:
-                self.state = "lose"
-                self.audio.play("lose")
+                self._begin_ending("lose")
                 return
         if self.wave_index >= len(self.level_config.waves) and not self.enemies:
-            self.state = "win"
-            self._complete_current_level()
-            self.audio.play("win")
+            self._begin_ending("win")
 
     def _update_roulette(self, dt: float) -> None:
         if self.roulette_unit is not None or self.selected_unit is not None:
@@ -1679,13 +1782,10 @@ class Game:
         if reached:
             self.enemies = [enemy for enemy in self.enemies if enemy.alive]
         if self.reverse_core_hp <= 0:
-            self.state = "win"
-            self._complete_current_level()
-            self.audio.play("win")
+            self._begin_ending("win")
             return
         if self.game_time >= self.reverse_duration:
-            self.state = "lose"
-            self.audio.play("lose")
+            self._begin_ending("lose")
 
     def _update_orders(self) -> None:
         if self.order_unit is not None:
@@ -1793,14 +1893,17 @@ class Game:
         elif self.state == "reset_confirm":
             self._draw_menu()
             self._draw_reset_overlay()
+        elif self.state == "ending":
+            self._draw_ending_animation()
+        elif self.state in {"win", "lose"}:
+            self._draw_ending_background(self.state, 1.0)
+            self._draw_end_overlay()
         else:
             self._draw_game()
             if self.show_info:
                 self._draw_info_overlay()
             if self.show_tuning:
                 self._draw_tuning_overlay(return_to_menu=False)
-            if self.state in {"win", "lose"}:
-                self._draw_end_overlay()
         if self.shake_timer > 0 and self.shake_intensity > 0:
             frame = self.screen.copy()
             dx = self.random.randint(-self.shake_intensity, self.shake_intensity)
@@ -2088,6 +2191,8 @@ class Game:
             self._draw_center_banner("已暂停", "按 P 或点击继续")
         if self.final_wave_timer > 0:
             self._draw_wave_warning()
+        if self.exit_confirm:
+            self._draw_exit_overlay()
 
     def _draw_top_bar(self) -> None:
         bar = pygame.Surface((WIDTH, TOP_BAR_HEIGHT), pygame.SRCALPHA)
@@ -2114,6 +2219,7 @@ class Game:
                 self._draw_card(card)
         self._draw_button(self._button_rect("pause"), "继续" if self.paused else "暂停", False)
         self._draw_button(self._button_rect("restart_play"), "重开", False)
+        self._draw_button(self._button_rect("exit_play"), "退出", False)
         self._draw_button(self._button_rect("info"), "简介", False)
         self._draw_button(self._button_rect("tuning"), "设置", False)
 
@@ -2168,23 +2274,33 @@ class Game:
 
     def _draw_card(self, card: Card) -> None:
         config = UNITS[card.unit_type]
-        selected = card.unit_type == self.selected_unit
+        remaining = self.card_cooldowns.get(card.unit_type, 0.0)
+        ready = remaining <= 0
+        selected = card.unit_type == self.selected_unit and ready
         affordable = self.charcoal >= config.cost
-        base = (66, 59, 50) if affordable else (38, 36, 34)
-        border = COLORS["gold"] if selected else ((128, 103, 73) if affordable else (66, 58, 52))
+        base = (66, 59, 50) if affordable and ready else (38, 36, 34)
+        border = COLORS["gold"] if selected else ((128, 103, 73) if affordable and ready else (66, 58, 52))
         self._draw_themed_panel(card.rect, base, border, selected, metal=True)
         image = pygame.transform.smoothscale(self.card_images[card.unit_type], (38, 38)).copy()
-        if not affordable:
+        if not affordable or not ready:
             dark_mask = pygame.Surface(image.get_size(), pygame.SRCALPHA)
             dark_mask.fill((0, 0, 0, 150))
             image.blit(dark_mask, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
         self.screen.blit(image, (card.rect.x + 6, card.rect.y + 12))
-        name = self.font_xs.render(config.name, True, COLORS["paper"] if affordable else COLORS["muted"])
-        cost = self.font_sm.render(str(config.cost), True, COLORS["gold"] if affordable else (226, 83, 72))
+        text_ready = affordable and ready
         name_font = self.font_xs if self.font_xs.size(config.name)[0] <= card.rect.width - 52 else get_font(14)
-        name = name_font.render(config.name, True, COLORS["paper"] if affordable else COLORS["muted"])
+        name = name_font.render(config.name, True, COLORS["paper"] if text_ready else COLORS["muted"])
+        cost = self.font_sm.render(str(config.cost), True, COLORS["gold"] if affordable else (226, 83, 72))
         self.screen.blit(name, (card.rect.x + 48, card.rect.y + 15))
         self.screen.blit(cost, (card.rect.x + 48, card.rect.y + 41))
+        if not ready:
+            total = max(0.1, UNIT_PLACEMENT_COOLDOWNS[card.unit_type])
+            ratio = min(1.0, remaining / total)
+            cover = pygame.Surface((card.rect.width, max(1, int(card.rect.height * ratio))), pygame.SRCALPHA)
+            cover.fill((12, 15, 17, 172))
+            self.screen.blit(cover, (card.rect.x, card.rect.bottom - cover.get_height()))
+            cooldown_text = self.font_xs.render(f"冷却 {remaining:.1f}s", True, (232, 236, 238))
+            self.screen.blit(cooldown_text, cooldown_text.get_rect(center=card.rect.center))
 
     def _draw_reverse_card(self, card: EnemyCard) -> None:
         config = ENEMIES[card.enemy_type]
@@ -2528,7 +2644,9 @@ class Game:
             image = pygame.transform.smoothscale(self.card_images[key], (28, 28))
             self.screen.blit(image, (rect.x + 5, rect.y + 3))
             cd = "无" if config.cooldown <= 0 else f"{config.cooldown:g}s"
-            line = f"{config.name}  费用:{config.cost}  生命:{config.hp}  攻击:{config.damage}  间隔:{cd}"
+            place_cd = UNIT_PLACEMENT_COOLDOWNS[key]
+            line = f"{config.name}  费用:{config.cost}  生命:{config.hp}  攻击:{config.damage}  攻/产:{cd}  放置:{place_cd:g}s"
+            line = self._fit_text(line, self.font_xs, rect.width - 48)
             line_s = self.font_xs.render(line, True, COLORS["paper"])
             self.screen.blit(line_s, (rect.x + 40, rect.y + 8))
 
@@ -2770,24 +2888,122 @@ class Game:
             text.set_alpha(int(255 * ratio))
             self.screen.blit(text, text.get_rect(center=(int(floater.x), int(floater.y))))
 
+    def _ending_scene_key(self, result: str) -> str:
+        if self.is_reverse_mode:
+            return "lose" if result == "win" else "win"
+        return result
+
+    def _draw_ending_background(self, result: str, progress: float) -> None:
+        scene_key = self._ending_scene_key(result)
+        image = self.ending_images[scene_key]
+        eased = 1.0 - (1.0 - max(0.0, min(1.0, progress))) ** 2
+        zoom = 1.0 + eased * 0.045
+        size = (int(WIDTH * zoom), int(HEIGHT * zoom))
+        frame = pygame.transform.smoothscale(image, size)
+        x = (WIDTH - size[0]) // 2 + int((eased - 0.5) * 14)
+        y = (HEIGHT - size[1]) // 2
+        if scene_key == "lose" and progress < 0.72:
+            strength = max(0, int(6 * (1.0 - progress / 0.72)))
+            x += self.random.randint(-strength, strength)
+            y += self.random.randint(-strength, strength)
+        self.screen.blit(frame, (x, y))
+
+        particles = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        tick = pygame.time.get_ticks()
+        if scene_key == "win":
+            for index in range(34):
+                px = (index * 149 + tick // 7) % WIDTH
+                py = HEIGHT - ((index * 83 + tick // 4) % (HEIGHT + 90))
+                radius = 1 + index % 3
+                pygame.draw.circle(particles, (255, 161 + index % 70, 58, 155), (px, py), radius)
+            for index in range(8):
+                px = 160 + (index * 211) % 1260
+                py = 560 - ((tick // 22 + index * 47) % 180)
+                pygame.draw.circle(particles, (235, 238, 224, 20), (px, py), 35 + index * 4)
+        else:
+            for index in range(12):
+                px = (index * 173 + tick // 35) % WIDTH
+                py = 560 - ((index * 51 + tick // 28) % 260)
+                pygame.draw.circle(particles, (48, 54, 60, 58), (px, py), 28 + index * 5)
+            pulse = int(18 + 18 * abs(math.sin(tick / 180.0)))
+            particles.fill((105, 12, 8, pulse), special_flags=pygame.BLEND_RGBA_ADD)
+        self.screen.blit(particles, (0, 0))
+
+    def _draw_ending_animation(self) -> None:
+        result = self.ending_result or "lose"
+        progress = min(1.0, self.ending_timer / ENDING_ANIMATION_DURATION)
+        self._draw_ending_background(result, progress)
+        bars = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        pygame.draw.rect(bars, (0, 0, 0, 220), (0, 0, WIDTH, 46))
+        pygame.draw.rect(bars, (0, 0, 0, 220), (0, HEIGHT - 46, WIDTH, 46))
+        self.screen.blit(bars, (0, 0))
+        fade_alpha = int(255 * max(0.0, 1.0 - progress / 0.18))
+        if fade_alpha:
+            fade = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+            fade.fill((0, 0, 0, fade_alpha))
+            self.screen.blit(fade, (0, 0))
+        if progress >= 0.28:
+            if self.is_reverse_mode:
+                title = "突袭成功" if result == "win" else "突袭失败"
+                subtitle = "烤炉防线已经攻破" if result == "win" else "系统摊主守住了最后一炉"
+            else:
+                title = "守卫成功" if result == "win" else "守卫失败"
+                subtitle = "烧烤摊重新燃起炉火" if result == "win" else "僵尸摧毁了夜市烧烤摊"
+            alpha = min(255, int((progress - 0.28) / 0.18 * 255))
+            title_surface = self.font_title.render(title, True, COLORS["paper"])
+            subtitle_surface = self.font_md.render(subtitle, True, (255, 190, 116))
+            title_surface.set_alpha(alpha)
+            subtitle_surface.set_alpha(alpha)
+            self.screen.blit(title_surface, title_surface.get_rect(center=(WIDTH // 2, 176)))
+            self.screen.blit(subtitle_surface, subtitle_surface.get_rect(center=(WIDTH // 2, 244)))
+
     def _draw_end_overlay(self) -> None:
         overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-        overlay.fill((0, 0, 0, 155))
+        overlay.fill((0, 0, 0, 126))
         self.screen.blit(overlay, (0, 0))
-        if self.state == "win":
-            unlock_text = "全部关卡已完成" if self.selected_level == len(LEVELS) else f"第 {self.selected_level + 1} 关已解锁"
-            subtitle = f"{unlock_text}  ·  奖励 {self.level_reward} 金币"
-            title = "烤炉已攻破" if self.is_reverse_mode else f"第 {self.selected_level} 关通过"
-            self._draw_center_banner(title, subtitle)
+        panel = pygame.Rect(WIDTH // 2 - 390, 116, 780, 444)
+        self._draw_themed_panel(panel, (43, 35, 31), (229, 166, 69), metal=False)
+        if self.is_reverse_mode:
+            title = "夜宵突袭成功" if self.state == "win" else "夜宵突袭失败"
+            result_line = "烤炉防线已经攻破" if self.state == "win" else "系统摊主守住了烤炉"
         else:
-            if self.is_reverse_mode:
-                self._draw_center_banner("夜宵突袭失败", "系统摊主守住了烤炉")
-            else:
-                self._draw_center_banner(f"第 {self.selected_level} 关失守", "僵尸冲进烧烤摊了")
+            title = "守卫成功" if self.state == "win" else "守卫失败"
+            result_line = f"第 {self.selected_level} 关已通过" if self.state == "win" else "僵尸冲进烧烤摊了"
+        title_surface = self.font_lg.render(title, True, COLORS["paper"])
+        result_surface = self.font_md.render(result_line, True, (255, 190, 116))
+        self.screen.blit(title_surface, title_surface.get_rect(center=(panel.centerx, panel.y + 70)))
+        self.screen.blit(result_surface, result_surface.get_rect(center=(panel.centerx, panel.y + 126)))
+
+        reward_panel = pygame.Rect(panel.centerx - 150, panel.y + 166, 300, 78)
+        pygame.draw.rect(self.screen, (28, 24, 21), reward_panel, border_radius=6)
+        pygame.draw.rect(self.screen, (187, 132, 51), reward_panel, 2, border_radius=6)
+        self.screen.blit(self.coin_image, self.coin_image.get_rect(center=(reward_panel.x + 55, reward_panel.centery)))
+        reward_label = self.font_xs.render("本关通关奖励", True, COLORS["muted"])
+        reward_value = self.font_md.render(f"{self.level_reward} 金币", True, (255, 220, 104))
+        self.screen.blit(reward_label, (reward_panel.x + 92, reward_panel.y + 12))
+        self.screen.blit(reward_value, (reward_panel.x + 92, reward_panel.y + 36))
+
+        if self.state == "win":
+            unlock_text = "十五关全部完成" if self.selected_level == len(LEVELS) else f"第 {self.selected_level + 1} 关已解锁"
+        else:
+            unlock_text = "调整阵容后可以重新挑战"
+        unlock_surface = self.font_sm.render(unlock_text, True, COLORS["paper"])
+        self.screen.blit(unlock_surface, unlock_surface.get_rect(center=(panel.centerx, panel.y + 282)))
         if self.state == "win" and self.selected_level < len(LEVELS):
             self._draw_button(self._button_rect("next_level"), "下一关", True)
         self._draw_button(self._button_rect("restart"), "重玩本关", self.state != "win" or self.selected_level == len(LEVELS))
         self._draw_button(self._button_rect("menu"), "返回主界面", False)
+
+    def _draw_exit_overlay(self) -> None:
+        self._draw_modal_backdrop()
+        panel = pygame.Rect(WIDTH // 2 - 320, HEIGHT // 2 - 150, 640, 300)
+        self._draw_themed_panel(panel, (44, 35, 31), (222, 159, 66), metal=False)
+        title = self.font_lg.render("退出本关？", True, COLORS["paper"])
+        detail = self.font_sm.render("当前关卡进度不会保留，也不会获得通关奖励。", True, (255, 190, 116))
+        self.screen.blit(title, title.get_rect(center=(panel.centerx, panel.y + 78)))
+        self.screen.blit(detail, detail.get_rect(center=(panel.centerx, panel.y + 140)))
+        self._draw_button(self._button_rect("exit_confirm_yes"), "退出关卡", True)
+        self._draw_button(self._button_rect("exit_confirm_no"), "继续守摊", False)
 
     def _draw_center_banner(self, title: str, subtitle: str) -> None:
         panel = pygame.Rect(0, 210, 620, 172)
@@ -2815,8 +3031,10 @@ class Game:
         if name == "account":
             return pygame.Rect(WIDTH - 305, 20, 280, 48)
         if name == "pause":
-            return pygame.Rect(WIDTH - 330, 18, 70, 36)
+            return pygame.Rect(WIDTH - 410, 18, 70, 36)
         if name == "restart_play":
+            return pygame.Rect(WIDTH - 330, 18, 70, 36)
+        if name == "exit_play":
             return pygame.Rect(WIDTH - 250, 18, 70, 36)
         if name == "info":
             return pygame.Rect(WIDTH - 170, 18, 70, 36)
@@ -2828,12 +3046,16 @@ class Game:
             return pygame.Rect(WIDTH // 2 - 70, 594, 140, 46)
         if name == "restart":
             if self.state == "win" and self.selected_level < len(LEVELS):
-                return pygame.Rect(WIDTH // 2 - 110, 430, 220, 58)
-            return pygame.Rect(WIDTH // 2 - 250, 430, 220, 58)
+                return pygame.Rect(WIDTH // 2 - 110, 470, 220, 58)
+            return pygame.Rect(WIDTH // 2 - 230, 470, 220, 58)
         if name == "next_level":
-            return pygame.Rect(WIDTH // 2 - 350, 430, 220, 58)
+            return pygame.Rect(WIDTH // 2 - 350, 470, 220, 58)
         if name == "menu":
-            return pygame.Rect(WIDTH // 2 + (130 if self.state == "win" and self.selected_level < len(LEVELS) else 30), 430, 220, 58)
+            return pygame.Rect(WIDTH // 2 + (130 if self.state == "win" and self.selected_level < len(LEVELS) else 10), 470, 220, 58)
+        if name == "exit_confirm_yes":
+            return pygame.Rect(WIDTH // 2 - 230, HEIGHT // 2 + 70, 220, 54)
+        if name == "exit_confirm_no":
+            return pygame.Rect(WIDTH // 2 + 10, HEIGHT // 2 + 70, 220, 54)
         if name == "login_confirm":
             return pygame.Rect(WIDTH // 2 - 110, HEIGHT // 2 + 82, 220, 52)
         if name == "screen_back":

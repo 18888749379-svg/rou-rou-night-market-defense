@@ -72,6 +72,8 @@ def main() -> None:
             enemy.rect.centerx = int(enemy.x)
         game.pickups = [CharcoalPickup(150, 325, 25, 7.0)]
         game.oil_pickups = [OilPickup(1170, 305)]
+        game.card_cooldowns["wall"] = 12.4
+        game.card_cooldowns["skewer"] = 3.6
         save_frame(game, "order-battle.png")
 
         game.selected_level = 11
@@ -100,6 +102,13 @@ def main() -> None:
         game.owned_units = ["charcoal", "wall", "skewer", "meatball", "beef", "wing"]
         game.login_message = ""
         save_frame(game, "shop.png")
+
+        game.selected_level = 5
+        game._apply_level_tuning(5)
+        game.reset_game()
+        game.state = "win"
+        game.level_reward = 90
+        save_frame(game, "ending-result.png")
 
         pygame.quit()
 

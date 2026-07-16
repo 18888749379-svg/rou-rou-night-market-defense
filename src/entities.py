@@ -8,6 +8,7 @@ import pygame
 from assets import load_image
 from settings import (
     CELL_SIZE,
+    EGG_MINE_DEPLOY_HP,
     ENEMIES,
     GRID_COLS,
     GRID_X,
@@ -53,6 +54,11 @@ class Unit:
         self.col = col
         self.max_hp = self.config.hp
         self.hp = self.config.hp
+        self.deployed = unit_type != "egg_mine"
+        self.deployment_timer = 0.0
+        self.triggered = False
+        if unit_type == "egg_mine":
+            self.hp = EGG_MINE_DEPLOY_HP
         self.cooldown = 0.0
         self.timer = 0.0
         self.age = 0.0
@@ -177,8 +183,19 @@ class Unit:
             game.spawn_pickup_at(x + 18, y - 18, game.charcoal_unit_value)
 
     def _update_egg_mine(self, dt: float, game: "Game") -> None:
-        self.timer += dt
-        if self.timer < self.config.cooldown:
+        if self.triggered:
+            return
+        if not self.deployed:
+            self.deployment_timer += dt
+            if self.deployment_timer < self.config.cooldown:
+                return
+            self.deployed = True
+            self.max_hp = self.config.hp
+            self.hp = self.config.hp
+            game.effects.append(ImpactBurst(self.rect.centerx, self.rect.centery, "spark"))
+            game.floaters.append(
+                FloatingText("部署完成", self.rect.centerx, self.rect.top - 6, (132, 236, 145), 0.8)
+            )
             return
         targets = [
             enemy for enemy in game.enemies
@@ -186,6 +203,7 @@ class Unit:
         ]
         if not targets:
             return
+        self.triggered = True
         for enemy in game.enemies:
             if enemy.alive and enemy.row == self.row and abs(enemy.x - self.rect.centerx) <= CELL_SIZE * 1.45:
                 enemy.take_damage(self.config.damage, game)
@@ -272,14 +290,17 @@ class Unit:
             fill.width = int(meter.width * ratio)
             pygame.draw.rect(surface, (255, 181, 69), fill, border_radius=3)
         elif self.unit_type == "egg_mine":
-            ratio = max(0.0, min(1.0, self.timer / self.config.cooldown))
-            color = (99, 225, 113) if ratio >= 1.0 else (255, 184, 70)
+            ratio = 1.0 if self.deployed else max(
+                0.0,
+                min(1.0, self.deployment_timer / self.config.cooldown),
+            )
+            color = (99, 225, 113) if self.deployed else (255, 184, 70)
             meter = pygame.Rect(self.rect.left + 8, self.rect.top - 8, self.rect.width - 16, 5)
             pygame.draw.rect(surface, (55, 43, 35), meter, border_radius=3)
             fill = meter.copy()
             fill.width = int(meter.width * ratio)
             pygame.draw.rect(surface, color, fill, border_radius=3)
-            if ratio >= 1.0:
+            if self.deployed:
                 pygame.draw.circle(surface, color, self.rect.center, self.rect.width // 2, 2)
         elif self.unit_type == "lotus":
             ratio = max(0.0, min(1.0, self.timer / self.config.cooldown))

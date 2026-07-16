@@ -19,6 +19,8 @@ PNG with `remove_chroma_key.py`.
 - `zombie_butcher.png`: muscular butcher zombie in red cook clothes and stained apron with a cleaver.
 - `zombie_giant.png`: towering gray giant zombie carrying a wooden signboard club.
 - `zombie_boss.png`: massive night-market zombie king with red-black armor, lantern ornaments, and a glowing brazier chest.
+- `ending_victory.png`: cinematic wide view of an intact, busy night-market barbecue stall with glowing grills, steam, and sparks.
+- `ending_defeat.png`: cinematic wide view of the same theme after an undead night raid, with a damaged stall, smoke, and cooling embers.
 
 Shared prompt constraints: one centered item, three-quarter game-board view, realistic
 night-market food lighting, generous padding, readable at 64 px, no text, no extra
@@ -29,3 +31,7 @@ The oil bottle, roulette, and eight zombie sprites were generated in the same bu
 three-quarter game sprite, realistic stylized Chinese night-market lighting, strong
 silhouette, no text, no cast shadow, generous padding, and a uniform magenta chroma
 background. The chroma source files were removed after transparent PNG validation.
+
+The two ending scenes were generated as original 16:9 environment key art with no
+text or UI. Pygame adds camera movement, particles, smoke, color pulses, and the
+settlement interface at runtime; the PNG files themselves are static backgrounds.
