@@ -36,6 +36,34 @@ OIL_BOTTLE_PRICE = 100
 OIL_CAPACITY_UPGRADE_COSTS = [150, 250, 400]
 MAX_OIL_CAPACITY = 6
 
+REVERSE_STARTING_CHARCOAL = 180
+REVERSE_DURATION = 120.0
+REVERSE_CORE_HP = 3
+REVERSE_HOT_INTERVAL = 18.0
+REVERSE_HOT_DURATION = 10.0
+REVERSE_RELIEF_VALUE = 35
+REVERSE_ZOMBIE_ORDER = ["baby", "normal", "courier", "pot", "drunk", "butcher"]
+REVERSE_ZOMBIE_COSTS = {
+    "baby": 35,
+    "normal": 60,
+    "courier": 85,
+    "pot": 115,
+    "drunk": 135,
+    "butcher": 210,
+}
+REVERSE_AI_SCHEDULE: list[tuple[float, list[str]]] = [
+    (5.0, ["charcoal", "skewer"]),
+    (12.0, ["wall"]),
+    (19.0, ["skewer", "charcoal"]),
+    (27.0, ["beef", "wall"]),
+    (36.0, ["wing", "skewer"]),
+    (46.0, ["lotus", "wall", "beef"]),
+    (57.0, ["egg_mine", "scallop"]),
+    (69.0, ["sausage", "wall", "wing"]),
+    (82.0, ["egg_mine", "beef", "skewer"]),
+    (96.0, ["scallop", "sausage", "wall"]),
+]
+
 
 @dataclass
 class UnitConfig:
@@ -192,14 +220,7 @@ LEVELS: list[LevelConfig] = [
         (59.0, ["giant", "giant", "butcher", "drunk", "courier", "pot"]),
         (72.0, ["boss", "giant", "butcher", "pot", "drunk", "courier", "normal"]),
     ], 2),
-    LevelConfig(11, "余烬未熄", "尸王倒下后，精英僵尸从后巷反扑。", [
-        (8.0, ["normal", "baby"]), (14.0, ["courier", "drunk", "normal"]),
-        (21.0, ["pot", "butcher", "courier"]), (29.0, ["giant", "drunk", "baby"]),
-        (38.0, ["butcher", "pot", "courier", "normal"]),
-        (48.0, ["giant", "butcher", "drunk", "courier", "baby"]),
-        (60.0, ["giant", "giant", "butcher", "pot", "drunk", "courier"]),
-        (74.0, ["boss", "giant", "butcher", "pot", "courier", "normal", "baby"]),
-    ], 2),
+    LevelConfig(11, "僵尸夜宵突袭", "反向购买并拖放僵尸，吃掉系统肉肉后摧毁烤炉。", [], 0, "reverse"),
     LevelConfig(12, "满巷催单", "完成限时肉肉订单赚取炭火，超时会提前引来下一波。", [
         (8.0, ["baby", "courier"]), (13.0, ["courier", "courier", "normal"]),
         (19.0, ["baby", "drunk", "courier", "normal"]),

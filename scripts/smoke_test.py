@@ -17,9 +17,14 @@ import save_data
 from settings import (
     ENEMIES,
     ENEMY_ORDER,
+    CELL_SIZE,
+    GRID_X,
+    GRID_Y,
     IMAGE_DIR,
     LEVELS,
     LEVEL_COIN_REWARDS,
+    REVERSE_AI_SCHEDULE,
+    REVERSE_ZOMBIE_COSTS,
     UNITS,
     UNIT_ORDER,
 )
@@ -38,6 +43,9 @@ def validate_configuration() -> None:
         times = [time for time, _ in level.waves]
         assert times == sorted(times), f"level {level.number}: waves are not sorted"
         assert len(times) == len(set(times)), f"level {level.number}: duplicate wave time"
+        if level.special == "reverse":
+            assert not level.waves
+            continue
         for _, wave in level.waves:
             assert wave, f"level {level.number}: empty wave"
             assert all(enemy in ENEMIES for enemy in wave), f"level {level.number}: unknown enemy"
@@ -78,6 +86,30 @@ def validate_game_flow() -> None:
             game._apply_level_tuning(level.number)
             game.reset_game()
             game.state = "playing"
+            if level.special == "reverse":
+                assert len(game.reverse_cards) == len(REVERSE_ZOMBIE_COSTS)
+                game.game_time = REVERSE_AI_SCHEDULE[0][0] - 2.0
+                game._update_reverse_director()
+                assert game.reverse_previews
+                game.game_time = REVERSE_AI_SCHEDULE[0][0] + 0.1
+                game._update_reverse_director()
+                assert game.units
+                before = game.charcoal
+                baby_card = next(card for card in game.reverse_cards if card.enemy_type == "baby")
+                assert game._begin_reverse_drag(baby_card.rect.center)
+                game._finish_reverse_drag((GRID_X + CELL_SIZE, GRID_Y + CELL_SIZE // 2))
+                assert game.enemies and game.enemies[0].enemy_type == "baby"
+                assert game.charcoal == before - REVERSE_ZOMBIE_COSTS["baby"]
+                eaten = game.units[0]
+                reward_before = game.charcoal
+                eaten.alive = False
+                game.on_unit_eaten(eaten, game.enemies[0])
+                assert game.charcoal > reward_before
+                game.reverse_core_hp = 1
+                game.enemies[0].x = -100
+                game.update(0.0)
+                assert game.state == "win"
+                continue
             game.game_time = 1000.0
             game._spawn_waves()
             assert game.spawned_enemies == game.total_enemies, level.number

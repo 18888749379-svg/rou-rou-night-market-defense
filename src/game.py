@@ -12,6 +12,7 @@ from entities import (
     Enemy,
     Explosion,
     FloatingText,
+    ImpactBurst,
     LaneBurn,
     Projectile,
     ScallopRain,
@@ -45,6 +46,15 @@ from settings import (
     OIL_BOTTLE_PRICE,
     OIL_CAPACITY_UPGRADE_COSTS,
     PLACEABLE_COLS,
+    REVERSE_AI_SCHEDULE,
+    REVERSE_CORE_HP,
+    REVERSE_DURATION,
+    REVERSE_HOT_DURATION,
+    REVERSE_HOT_INTERVAL,
+    REVERSE_RELIEF_VALUE,
+    REVERSE_STARTING_CHARCOAL,
+    REVERSE_ZOMBIE_COSTS,
+    REVERSE_ZOMBIE_ORDER,
     STARTING_CHARCOAL,
     TOP_BAR_HEIGHT,
     UNITS,
@@ -79,6 +89,20 @@ def _is_finite_number(value: object) -> bool:
 class Card:
     unit_type: str
     rect: pygame.Rect
+
+
+@dataclass
+class EnemyCard:
+    enemy_type: str
+    rect: pygame.Rect
+
+
+@dataclass
+class ReverseSpawnPreview:
+    unit_type: str
+    row: int
+    col: int
+    spawn_time: float
 
 
 @dataclass
@@ -215,12 +239,22 @@ class Game:
         self.grill_pickup_value = CHARCOAL_PICKUP_VALUE
         self.charcoal_unit_value = CHARCOAL_PICKUP_VALUE
         self.pickup_ttl = CHARCOAL_PICKUP_TTL
+        self.reverse_starting_charcoal = REVERSE_STARTING_CHARCOAL
+        self.reverse_duration = REVERSE_DURATION
+        self.reverse_core_max_hp = REVERSE_CORE_HP
+        self.reverse_hot_interval = REVERSE_HOT_INTERVAL
+        self.reverse_reward_percent = 50
         self.factory_resource_settings = {
             "initial_charcoal": self.initial_charcoal,
             "grill_interval": self.grill_interval,
             "grill_pickup_value": self.grill_pickup_value,
             "charcoal_unit_value": self.charcoal_unit_value,
             "pickup_ttl": self.pickup_ttl,
+            "reverse_starting_charcoal": self.reverse_starting_charcoal,
+            "reverse_duration": self.reverse_duration,
+            "reverse_core_max_hp": self.reverse_core_max_hp,
+            "reverse_hot_interval": self.reverse_hot_interval,
+            "reverse_reward_percent": self.reverse_reward_percent,
         }
         self.level_tuning: dict[str, dict] = {}
         self.unlocked_level = 1
@@ -254,13 +288,15 @@ class Game:
         self.oil_image = load_image("oil_bottle.png", (64, 64))
         self.roulette_image = load_image("roulette_wheel.png", (200, 200))
         self.card_images = {key: load_image(config.image, (56, 56)) for key, config in UNITS.items()}
+        self.enemy_card_images = {key: load_image(config.image, (58, 68)) for key, config in ENEMIES.items()}
         self.cards = self._make_cards()
+        self.reverse_cards = self._make_reverse_cards()
         self.reset_game()
         self._save_all()
         self.audio.play_music("menu")
 
     def _make_cards(self) -> list[Card]:
-        if hasattr(self, "level_config") and self.level_config.special == "roulette":
+        if hasattr(self, "level_config") and self.level_config.special in {"roulette", "reverse"}:
             return []
         cards: list[Card] = []
         x = 330
@@ -271,6 +307,14 @@ class Game:
         for key in shop_order:
             cards.append(Card(key, pygame.Rect(x, 14, 122, 76)))
             x += 130
+        return cards
+
+    def _make_reverse_cards(self) -> list[EnemyCard]:
+        cards: list[EnemyCard] = []
+        x = 240
+        for key in REVERSE_ZOMBIE_ORDER:
+            cards.append(EnemyCard(key, pygame.Rect(x, 14, 118, 76)))
+            x += 126
         return cards
 
     def reset_game(self) -> None:
@@ -291,6 +335,9 @@ class Game:
         self.defeated_enemies = 0
         self.level_config = LEVELS[self.selected_level - 1]
         self.total_enemies = sum(len(enemy_types) for _, enemy_types in self.level_config.waves)
+        if self.level_config.special == "reverse":
+            self.charcoal = self.reverse_starting_charcoal
+            self.total_enemies = sum(len(unit_types) for _, unit_types in REVERSE_AI_SCHEDULE)
         oil_count = min(self.level_config.oil_drops, self.total_enemies)
         self.oil_drop_kills = set(self.random.sample(range(1, self.total_enemies + 1), oil_count))
         self.oil_inventory = 0
@@ -305,6 +352,20 @@ class Game:
         self.order_deadline = 0.0
         self.orders_completed = 0
         self.orders_failed = 0
+        self.selected_enemy: str | None = None
+        self.dragging_enemy: str | None = None
+        self.drag_position = (0, 0)
+        self.reverse_schedule_index = 0
+        self.reverse_previews: list[ReverseSpawnPreview] = []
+        self.reverse_core_hp = self.reverse_core_max_hp
+        self.reverse_eaten_units = 0
+        self.reverse_zombies_lost = 0
+        self.reverse_next_relief = 20.0
+        self.reverse_hot_lane: int | None = None
+        self.reverse_hot_until = 0.0
+        self.reverse_next_hot_lane = self.reverse_hot_interval
+        self.shake_timer = 0.0
+        self.shake_intensity = 0
         self.final_wave_started = False
         self.final_wave_timer = 0.0
         self.paused = False
@@ -318,12 +379,16 @@ class Game:
         elif self.level_config.special == "orders":
             self.message = "限时订单：按要求放置肉肉赚炭火，超时会提前出怪"
             self.message_timer = 3.2
+        elif self.level_config.special == "reverse":
+            self.message = "拖动顶部僵尸到任意路线，吃掉肉肉赚炭火并突破烤炉"
+            self.message_timer = 4.0
         else:
             self.message = "点击油瓶收取；使用油瓶后点击肉肉释放大招"
             self.message_timer = 2.2
         self.flash_cell = None
         self.flash_timer = 0.0
         self.cards = self._make_cards()
+        self.reverse_cards = self._make_reverse_cards()
 
     def _apply_saved_data(self, data: dict) -> None:
         tuning = _as_dict(data.get("global_tuning", data.get("tuning", {})))
@@ -533,6 +598,10 @@ class Game:
     def oil_capacity(self) -> int:
         return min(MAX_OIL_CAPACITY, 3 + self.oil_capacity_level)
 
+    @property
+    def is_reverse_mode(self) -> bool:
+        return hasattr(self, "level_config") and self.level_config.special == "reverse"
+
     def _save_all(self) -> None:
         self._capture_level_tuning()
         self._sync_account()
@@ -588,7 +657,13 @@ class Game:
             elif event.type == pygame.KEYDOWN:
                 self._handle_key(event.key)
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                if self.state == "playing" and self.is_reverse_mode and self._begin_reverse_drag(event.pos):
+                    continue
                 self._handle_click(event.pos)
+            elif event.type == pygame.MOUSEMOTION and self.dragging_enemy is not None:
+                self.drag_position = event.pos
+            elif event.type == pygame.MOUSEBUTTONUP and event.button == 1 and self.dragging_enemy is not None:
+                self._finish_reverse_drag(event.pos)
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 3 and self.state == "playing":
                 if self._cancel_action_modes():
                     self.message = "已取消当前操作"
@@ -660,7 +735,9 @@ class Game:
             number_keys = [pygame.K_1, pygame.K_2, pygame.K_3, pygame.K_4, pygame.K_5, pygame.K_6]
             if key in number_keys:
                 index = number_keys.index(key)
-                if index < len(self.cards) and not self.paused:
+                if self.is_reverse_mode and index < len(self.reverse_cards) and not self.paused:
+                    self._select_enemy(self.reverse_cards[index].enemy_type)
+                elif index < len(self.cards) and not self.paused:
                     self._select_unit(self.cards[index].unit_type)
             elif key == pygame.K_p:
                 self.paused = not self.paused
@@ -711,8 +788,16 @@ class Game:
                 return
 
     def _cancel_action_modes(self) -> bool:
-        had_active = self.selected_unit is not None or self.remove_mode or self.ultimate_mode
+        had_active = (
+            self.selected_unit is not None
+            or self.selected_enemy is not None
+            or self.dragging_enemy is not None
+            or self.remove_mode
+            or self.ultimate_mode
+        )
         self.selected_unit = None
+        self.selected_enemy = None
+        self.dragging_enemy = None
         self.remove_mode = False
         self.ultimate_mode = False
         return had_active
@@ -722,6 +807,12 @@ class Game:
             self.selected_unit = None
             return
         self.selected_unit = unit_type
+        self.remove_mode = False
+        self.ultimate_mode = False
+
+    def _select_enemy(self, enemy_type: str) -> None:
+        self.selected_enemy = None if self.selected_enemy == enemy_type else enemy_type
+        self.selected_unit = None
         self.remove_mode = False
         self.ultimate_mode = False
 
@@ -876,6 +967,9 @@ class Game:
             return
         if self.paused:
             return
+        if self.is_reverse_mode:
+            self._handle_reverse_click(pos)
+            return
         for pickup in list(self.pickups):
             if pickup.rect.collidepoint(pos):
                 self.collect_pickup(pickup)
@@ -1012,6 +1106,9 @@ class Game:
             self._require_account("loadout")
             return
         level = LEVELS[self.selected_level - 1]
+        if level.special == "reverse":
+            self.start_game()
+            return
         if level.special == "roulette":
             self.active_loadout = [key for key in self.owned_units if key != "charcoal"]
             if not self.active_loadout:
@@ -1140,6 +1237,91 @@ class Game:
         self._complete_order_if_matched(placed_type, unit.rect.centerx, unit.rect.top)
         self.selected_unit = None
         self.audio.play("place")
+
+    def _begin_reverse_drag(self, pos: tuple[int, int]) -> bool:
+        if self.paused or self.show_info or self.show_tuning:
+            return False
+        for card in self.reverse_cards:
+            if card.rect.collidepoint(pos):
+                self._select_enemy(card.enemy_type)
+                self.selected_enemy = card.enemy_type
+                self.dragging_enemy = card.enemy_type
+                self.drag_position = pos
+                self.audio.play("click")
+                return True
+        return False
+
+    def _finish_reverse_drag(self, pos: tuple[int, int]) -> None:
+        enemy_type = self.dragging_enemy
+        self.dragging_enemy = None
+        if enemy_type is None:
+            return
+        if any(card.enemy_type == enemy_type and card.rect.collidepoint(pos) for card in self.reverse_cards):
+            return
+        cell = self.pos_to_cell(pos)
+        if cell is None:
+            self.message = "把僵尸拖到五条烤盘路线中的任意一条"
+            self.message_timer = 1.8
+            self.audio.play("bad")
+            return
+        self.spawn_reverse_enemy(enemy_type, cell[0])
+
+    def _handle_reverse_click(self, pos: tuple[int, int]) -> None:
+        for card in self.reverse_cards:
+            if card.rect.collidepoint(pos):
+                self._select_enemy(card.enemy_type)
+                self.audio.play("click")
+                return
+        cell = self.pos_to_cell(pos)
+        if cell and self.selected_enemy is not None:
+            self.spawn_reverse_enemy(self.selected_enemy, cell[0])
+
+    def spawn_reverse_enemy(self, enemy_type: str, row: int) -> bool:
+        if enemy_type not in REVERSE_ZOMBIE_COSTS or not 0 <= row < GRID_ROWS:
+            return False
+        cost = REVERSE_ZOMBIE_COSTS[enemy_type]
+        if self.charcoal < cost:
+            missing = cost - self.charcoal
+            self.message = f"炭火军费不足，还差 {missing}"
+            self.message_timer = 1.8
+            self.audio.play("bad")
+            return False
+        enemy = Enemy(enemy_type, row)
+        enemy.x = GRID_X + (GRID_COLS - 0.52) * CELL_SIZE
+        enemy.rect.centerx = int(enemy.x)
+        self.enemies.append(enemy)
+        self.charcoal -= cost
+        self.selected_enemy = None
+        self.effects.append(ImpactBurst(enemy.rect.centerx, enemy.rect.centery, "spark"))
+        self.floaters.append(FloatingText(f"-{cost}", enemy.x, enemy.rect.top, (255, 205, 91), 0.8))
+        self.message = f"{ENEMIES[enemy_type].name} 已投入第 {row + 1} 路"
+        self.message_timer = 1.2
+        self.audio.play("zombie_spawn")
+        return True
+
+    def on_unit_eaten(self, unit: Unit, enemy: Enemy) -> None:
+        if not self.is_reverse_mode:
+            return
+        reward = max(20, min(80, int(round(unit.config.cost * self.reverse_reward_percent / 100))))
+        if unit.unit_type == "charcoal":
+            reward += 25
+        hot_bonus = self.reverse_hot_lane == unit.row and self.game_time < self.reverse_hot_until
+        if hot_bonus:
+            reward = int(round(reward * 1.5))
+        self.charcoal = min(MAX_CHARCOAL, self.charcoal + reward)
+        self.reverse_eaten_units += 1
+        label = f"热卖 +{reward}" if hot_bonus else f"吃掉 +{reward}"
+        self.floaters.append(FloatingText(label, unit.rect.centerx, unit.rect.top, (255, 202, 84), 1.0))
+        self.effects.append(ImpactBurst(unit.rect.centerx, unit.rect.centery, "grease"))
+        self.trigger_shake(3, 0.14)
+
+    def on_reverse_enemy_lost(self, enemy: Enemy) -> None:
+        self.reverse_zombies_lost += 1
+        self.floaters.append(FloatingText("进攻失败", enemy.x, enemy.y - 16, (173, 207, 126), 0.8))
+
+    def trigger_shake(self, intensity: int = 2, duration: float = 0.10) -> None:
+        self.shake_intensity = max(self.shake_intensity, max(0, intensity))
+        self.shake_timer = max(self.shake_timer, max(0.0, duration))
 
     def try_remove(self, row: int, col: int) -> None:
         unit = self.unit_at(row, col)
@@ -1321,16 +1503,19 @@ class Game:
         self.game_time += dt
         if self.level_config.special == "roulette":
             self._update_roulette(dt)
-        else:
+        elif not self.is_reverse_mode:
             self.next_ambient_pickup -= dt
             if self.next_ambient_pickup <= 0:
                 self.spawn_grill_pickup()
                 self.next_ambient_pickup = self._next_ambient_delay()
-        if self.level_config.special == "conveyor":
+        if self.is_reverse_mode:
+            self._update_reverse_director()
+        elif self.level_config.special == "conveyor":
             self._update_conveyor()
         elif self.level_config.special == "orders":
             self._update_orders()
-        self._spawn_waves()
+        if not self.is_reverse_mode:
+            self._spawn_waves()
         for unit in list(self.units):
             unit.update(dt, self)
         for enemy in list(self.enemies):
@@ -1366,6 +1551,11 @@ class Game:
             self.final_wave_timer -= dt
         if self.conveyor_flash_timer > 0:
             self.conveyor_flash_timer -= dt
+        if self.shake_timer > 0:
+            self.shake_timer = max(0.0, self.shake_timer - dt)
+        if self.is_reverse_mode:
+            self._update_reverse_outcome()
+            return
         for enemy in self.enemies:
             if enemy.x <= DEFENSE_LINE_X:
                 self.state = "lose"
@@ -1397,6 +1587,105 @@ class Game:
         self.message = "回转烤盘启动：所有肉肉右移一格！"
         self.message_timer = 1.8
         self.audio.play("place")
+
+    def _update_reverse_director(self) -> None:
+        if self.reverse_hot_lane is not None and self.game_time >= self.reverse_hot_until:
+            self.reverse_hot_lane = None
+        if self.game_time >= self.reverse_next_hot_lane:
+            previous = self.reverse_hot_lane
+            choices = [row for row in range(GRID_ROWS) if row != previous]
+            self.reverse_hot_lane = self.random.choice(choices)
+            self.reverse_hot_until = self.game_time + REVERSE_HOT_DURATION
+            self.reverse_next_hot_lane += self.reverse_hot_interval
+            self.message = f"第 {self.reverse_hot_lane + 1} 路成为今日热卖：吃肉返还 ×1.5"
+            self.message_timer = 2.4
+
+        while self.reverse_schedule_index < len(REVERSE_AI_SCHEDULE):
+            spawn_time, unit_types = REVERSE_AI_SCHEDULE[self.reverse_schedule_index]
+            if self.game_time < spawn_time - 2.5:
+                break
+            reserved = {(preview.row, preview.col) for preview in self.reverse_previews}
+            for unit_type in unit_types:
+                cell = self._choose_reverse_ai_cell(unit_type, reserved)
+                if cell is None:
+                    continue
+                row, col = cell
+                reserved.add(cell)
+                self.reverse_previews.append(ReverseSpawnPreview(unit_type, row, col, spawn_time))
+            self.reverse_schedule_index += 1
+
+        for preview in list(self.reverse_previews):
+            if self.game_time < preview.spawn_time:
+                continue
+            row, col = preview.row, preview.col
+            if self.unit_at(row, col) is not None or self.enemy_occupies_cell(row, col):
+                replacement = self._choose_reverse_ai_cell(preview.unit_type, set())
+                if replacement is None:
+                    self.reverse_previews.remove(preview)
+                    continue
+                row, col = replacement
+            unit = Unit(preview.unit_type, row, col)
+            self.units.append(unit)
+            self.effects.append(ImpactBurst(unit.rect.centerx, unit.rect.centery, "spark"))
+            self.floaters.append(FloatingText("摊主上菜", unit.rect.centerx, unit.rect.top, (255, 214, 118), 0.9))
+            self.reverse_previews.remove(preview)
+
+        minimum_cost = min(REVERSE_ZOMBIE_COSTS.values())
+        if not self.enemies and self.charcoal < minimum_cost and self.game_time >= self.reverse_next_relief:
+            self.charcoal = min(MAX_CHARCOAL, self.charcoal + REVERSE_RELIEF_VALUE)
+            self.reverse_next_relief = self.game_time + 20.0
+            self.message = f"最后一份夜宵补给：炭火 +{REVERSE_RELIEF_VALUE}"
+            self.message_timer = 2.2
+            self.audio.play("place")
+
+    def _choose_reverse_ai_cell(
+        self,
+        unit_type: str,
+        reserved: set[tuple[int, int]],
+    ) -> tuple[int, int] | None:
+        if unit_type == "charcoal":
+            columns = range(0, 4)
+        elif unit_type == "wall":
+            columns = range(4, 9)
+        else:
+            columns = range(1, 9)
+        candidates = [
+            (row, col)
+            for row in range(GRID_ROWS)
+            for col in columns
+            if (row, col) not in reserved
+            and self.unit_at(row, col) is None
+            and not self.enemy_occupies_cell(row, col)
+        ]
+        if not candidates:
+            return None
+        row_counts = {
+            row: sum(1 for unit in self.units if unit.alive and unit.row == row)
+            for row in range(GRID_ROWS)
+        }
+        minimum = min(row_counts[row] for row, _ in candidates)
+        balanced = [cell for cell in candidates if row_counts[cell[0]] <= minimum + 1]
+        return self.random.choice(balanced or candidates)
+
+    def _update_reverse_outcome(self) -> None:
+        reached = [enemy for enemy in self.enemies if enemy.alive and enemy.x <= DEFENSE_LINE_X]
+        for enemy in reached:
+            enemy.alive = False
+            self.reverse_core_hp = max(0, self.reverse_core_hp - 1)
+            self.effects.append(Explosion(DEFENSE_LINE_X, enemy.rect.centery))
+            self.trigger_shake(6, 0.28)
+            self.message = f"突破成功！烤炉耐久剩余 {self.reverse_core_hp}"
+            self.message_timer = 2.0
+        if reached:
+            self.enemies = [enemy for enemy in self.enemies if enemy.alive]
+        if self.reverse_core_hp <= 0:
+            self.state = "win"
+            self._complete_current_level()
+            self.audio.play("win")
+            return
+        if self.game_time >= self.reverse_duration:
+            self.state = "lose"
+            self.audio.play("lose")
 
     def _update_orders(self) -> None:
         if self.order_unit is not None:
@@ -1512,6 +1801,11 @@ class Game:
                 self._draw_tuning_overlay(return_to_menu=False)
             if self.state in {"win", "lose"}:
                 self._draw_end_overlay()
+        if self.shake_timer > 0 and self.shake_intensity > 0:
+            frame = self.screen.copy()
+            dx = self.random.randint(-self.shake_intensity, self.shake_intensity)
+            dy = self.random.randint(-self.shake_intensity, self.shake_intensity)
+            self.screen.blit(frame, (dx, dy))
         pygame.display.flip()
 
     def _draw_background(self) -> None:
@@ -1519,6 +1813,41 @@ class Game:
         shade = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
         shade.fill((8, 9, 12, 44))
         self.screen.blit(shade, (0, 0))
+
+    def _draw_themed_panel(
+        self,
+        rect: pygame.Rect,
+        base: tuple[int, int, int],
+        border: tuple[int, int, int],
+        selected: bool = False,
+        metal: bool = False,
+    ) -> None:
+        shadow = pygame.Surface((rect.width + 10, rect.height + 12), pygame.SRCALPHA)
+        pygame.draw.rect(shadow, (0, 0, 0, 115), (5, 7, rect.width, rect.height), border_radius=8)
+        self.screen.blit(shadow, (rect.x - 5, rect.y - 5))
+        pygame.draw.rect(self.screen, base, rect, border_radius=8)
+        texture = pygame.Surface(rect.size, pygame.SRCALPHA)
+        grain = (184, 177, 160, 28) if metal else (157, 101, 64, 30)
+        for offset in range(9, rect.height, 18):
+            pygame.draw.line(
+                texture,
+                grain,
+                (10, offset),
+                (rect.width - 10, offset + (offset % 3 - 1)),
+                1,
+            )
+        self.screen.blit(texture, rect.topleft)
+        pygame.draw.rect(self.screen, border, rect, 4 if selected else 2, border_radius=8)
+        if selected:
+            glow = pygame.Surface((rect.width + 16, rect.height + 16), pygame.SRCALPHA)
+            pygame.draw.rect(glow, (255, 177, 49, 76), glow.get_rect(), 5, border_radius=10)
+            self.screen.blit(glow, (rect.x - 8, rect.y - 8))
+        for corner in (rect.topleft, rect.topright, rect.bottomleft, rect.bottomright):
+            inset_x = 7 if corner[0] == rect.left else -7
+            inset_y = 7 if corner[1] == rect.top else -7
+            point = (corner[0] + inset_x, corner[1] + inset_y)
+            pygame.draw.circle(self.screen, (207, 151, 62), point, 3)
+            pygame.draw.circle(self.screen, (92, 61, 34), point, 3, 1)
 
     def _draw_menu(self) -> None:
         title = self.font_title.render("肉肉守摊大战僵尸", True, COLORS["paper"])
@@ -1612,14 +1941,14 @@ class Game:
             rect = self._unit_library_rect(index)
             config = UNITS[key]
             owned = key in self.owned_units
-            selected = key in self.loadout_selection
-            base = (74, 58, 45) if owned else (43, 38, 35)
-            pygame.draw.rect(self.screen, base, rect, border_radius=8)
-            border = COLORS["gold"] if selected else ((124, 95, 66) if owned else (75, 68, 63))
-            pygame.draw.rect(self.screen, border, rect, 4 if selected else 2, border_radius=8)
+            selected = mode == "loadout" and key in self.loadout_selection
+            base = (65, 59, 52) if owned else (39, 38, 37)
+            border = COLORS["gold"] if selected else ((154, 119, 73) if owned else (75, 70, 65))
+            self._draw_themed_panel(rect, base, border, selected, metal=True)
             image = pygame.transform.smoothscale(self.card_images[key], (70, 70)).copy()
             if not owned:
-                image.set_alpha(110)
+                image = pygame.transform.grayscale(image)
+                image.set_alpha(145)
             self.screen.blit(image, (rect.x + 14, rect.y + 18))
             name = self.font_sm.render(config.name, True, COLORS["paper"] if owned else COLORS["muted"])
             self.screen.blit(name, (rect.x + 98, rect.y + 14))
@@ -1647,12 +1976,18 @@ class Game:
 
     def _draw_shop_action(self, index: int, key: str, owned: bool) -> None:
         rect = self._shop_buy_rect(index)
+        price = UNIT_COIN_PRICES.get(key, 0)
         if owned:
             pygame.draw.rect(self.screen, (66, 64, 61), rect, border_radius=6)
             label = self.font_xs.render("已拥有", True, (160, 157, 151))
+        elif self.coins < price:
+            pygame.draw.rect(self.screen, (61, 55, 52), rect, border_radius=6)
+            pygame.draw.rect(self.screen, (116, 73, 63), rect, 1, border_radius=6)
+            label = self.font_xs.render(f"还差 {price - self.coins}", True, (219, 149, 128))
         else:
             pygame.draw.rect(self.screen, (226, 166, 65), rect, border_radius=6)
-            label = self.font_xs.render(f"{UNIT_COIN_PRICES.get(key, 0)} 金币", True, COLORS["black"])
+            pygame.draw.rect(self.screen, (255, 225, 151), rect, 1, border_radius=6)
+            label = self.font_xs.render(f"{price} 金币", True, COLORS["black"])
         self.screen.blit(label, label.get_rect(center=rect.center))
 
     def _draw_skill_action(self, index: int, key: str, owned: bool) -> None:
@@ -1662,6 +1997,8 @@ class Game:
             text, color = "未拥有", (67, 65, 63)
         elif level >= len(UPGRADE_COSTS):
             text, color = "已满级", (67, 95, 71)
+        elif self.coins < UPGRADE_COSTS[level]:
+            text, color = f"还差 {UPGRADE_COSTS[level] - self.coins}", (79, 58, 53)
         else:
             text, color = f"升级 {UPGRADE_COSTS[level]} 金币", (226, 166, 65)
         pygame.draw.rect(self.screen, color, rect, border_radius=6)
@@ -1716,14 +2053,17 @@ class Game:
         self._draw_top_bar()
         self._draw_grid()
         self._draw_defense_line()
+        if self.is_reverse_mode:
+            self._draw_reverse_previews()
         if self.level_config.special == "conveyor":
             self._draw_conveyor_status()
         elif self.level_config.special == "orders":
             self._draw_order_status()
-        for pickup in self.pickups:
-            pickup.draw(self.screen, self.font_sm)
-        for pickup in self.coin_pickups:
-            pickup.draw(self.screen, self.font_xs)
+        if not self.is_reverse_mode:
+            for pickup in self.pickups:
+                pickup.draw(self.screen, self.font_sm)
+            for pickup in self.coin_pickups:
+                pickup.draw(self.screen, self.font_xs)
         for unit in self.units:
             unit.draw(self.screen)
         for enemy in sorted(self.enemies, key=lambda e: e.y):
@@ -1734,9 +2074,13 @@ class Game:
             effect.draw(self.screen)
         for effect in self.special_effects:
             effect.draw(self.screen)
-        for pickup in self.oil_pickups:
-            pickup.draw(self.screen, self.font_xs)
-        self._draw_oil_hud()
+        if not self.is_reverse_mode:
+            for pickup in self.oil_pickups:
+                pickup.draw(self.screen, self.font_xs)
+            self._draw_oil_hud()
+        else:
+            self._draw_reverse_hud()
+            self._draw_dragged_enemy()
         self._draw_floaters()
         if self.message_timer > 0 and self.message and self.final_wave_timer <= 0:
             self._draw_message_toast()
@@ -1747,16 +2091,27 @@ class Game:
 
     def _draw_top_bar(self) -> None:
         bar = pygame.Surface((WIDTH, TOP_BAR_HEIGHT), pygame.SRCALPHA)
-        bar.fill((28, 23, 22, 212))
+        bar.fill((31, 25, 21, 236))
+        for y in range(10, TOP_BAR_HEIGHT - 8, 17):
+            pygame.draw.line(bar, (77, 50, 34, 110), (0, y), (WIDTH, y + y % 3 - 1), 1)
+        for x in range(14, WIDTH, 86):
+            pygame.draw.circle(bar, (191, 135, 57, 190), (x, 9), 3)
+            pygame.draw.circle(bar, (77, 48, 29, 220), (x, 9), 3, 1)
         self.screen.blit(bar, (0, 0))
-        pygame.draw.rect(self.screen, (189, 116, 54), (0, TOP_BAR_HEIGHT - 8, WIDTH, 8))
+        pygame.draw.rect(self.screen, (65, 42, 29), (0, TOP_BAR_HEIGHT - 9, WIDTH, 9))
+        pygame.draw.line(self.screen, (224, 153, 61), (0, TOP_BAR_HEIGHT - 9), (WIDTH, TOP_BAR_HEIGHT - 9), 2)
         self._draw_charcoal_status()
-        timer = self.font_sm.render(f"第 {self.selected_level} 关  ·  时间 {int(self.game_time)}s", True, COLORS["paper"])
+        mode_name = "突袭" if self.is_reverse_mode else "时间"
+        timer = self.font_sm.render(f"第 {self.selected_level} 关  ·  {mode_name} {int(self.game_time)}s", True, COLORS["paper"])
         self.screen.blit(timer, (24, 99))
         self._draw_progress_bar()
-        self._draw_tongs_tool()
-        for card in self.cards:
-            self._draw_card(card)
+        if self.is_reverse_mode:
+            for card in self.reverse_cards:
+                self._draw_reverse_card(card)
+        else:
+            self._draw_tongs_tool()
+            for card in self.cards:
+                self._draw_card(card)
         self._draw_button(self._button_rect("pause"), "继续" if self.paused else "暂停", False)
         self._draw_button(self._button_rect("restart_play"), "重开", False)
         self._draw_button(self._button_rect("info"), "简介", False)
@@ -1797,8 +2152,15 @@ class Game:
         pygame.draw.rect(self.screen, (255, 198, 84), panel, 3, border_radius=10)
         pygame.draw.circle(self.screen, (255, 101, 45), (panel.x + 28, panel.y + 38), 16)
         pygame.draw.circle(self.screen, (255, 219, 92), (panel.x + 34, panel.y + 31), 7)
+        tick = pygame.time.get_ticks() // 120
+        for index in range(5):
+            sx = panel.x + 18 + (index * 29 + tick * 3) % 160
+            sy = panel.bottom - 5 - (index * 11 + tick * 5) % 36
+            radius = 1 + index % 2
+            pygame.draw.circle(self.screen, (255, 143 + index * 16, 51), (sx, sy), radius)
         roulette = self.level_config.special == "roulette"
-        label = self.font_sm.render("转盘关" if roulette else "炭火值", True, COLORS["paper"])
+        label_text = "转盘关" if roulette else ("炭火军费" if self.is_reverse_mode else "炭火值")
+        label = self.font_sm.render(label_text, True, COLORS["paper"])
         value_font = get_font(22 if roulette else (26 if self.charcoal < 1000 else 22), True)
         value = value_font.render("无需炭火" if roulette else str(self.charcoal), True, (255, 221, 104))
         self.screen.blit(label, (panel.x + 62, panel.y + 10))
@@ -1808,10 +2170,9 @@ class Game:
         config = UNITS[card.unit_type]
         selected = card.unit_type == self.selected_unit
         affordable = self.charcoal >= config.cost
-        base = (75, 62, 49) if affordable else (38, 34, 32)
-        pygame.draw.rect(self.screen, base, card.rect, border_radius=8)
+        base = (66, 59, 50) if affordable else (38, 36, 34)
         border = COLORS["gold"] if selected else ((128, 103, 73) if affordable else (66, 58, 52))
-        pygame.draw.rect(self.screen, border, card.rect, 3 if selected else 2, border_radius=8)
+        self._draw_themed_panel(card.rect, base, border, selected, metal=True)
         image = pygame.transform.smoothscale(self.card_images[card.unit_type], (38, 38)).copy()
         if not affordable:
             dark_mask = pygame.Surface(image.get_size(), pygame.SRCALPHA)
@@ -1825,6 +2186,27 @@ class Game:
         self.screen.blit(name, (card.rect.x + 48, card.rect.y + 15))
         self.screen.blit(cost, (card.rect.x + 48, card.rect.y + 41))
 
+    def _draw_reverse_card(self, card: EnemyCard) -> None:
+        config = ENEMIES[card.enemy_type]
+        cost_value = REVERSE_ZOMBIE_COSTS[card.enemy_type]
+        selected = card.enemy_type == self.selected_enemy
+        affordable = self.charcoal >= cost_value
+        base = (70, 55, 48) if affordable else (38, 36, 35)
+        border = (245, 173, 62) if selected else ((142, 91, 66) if affordable else (73, 65, 61))
+        self._draw_themed_panel(card.rect, base, border, selected, metal=True)
+        pygame.draw.line(self.screen, (126, 48, 37), (card.rect.x + 8, card.rect.bottom - 11), (card.rect.right - 8, card.rect.bottom - 11), 3)
+        image = pygame.transform.smoothscale(self.enemy_card_images[card.enemy_type], (42, 54)).copy()
+        if not affordable:
+            image.set_alpha(86)
+        self.screen.blit(image, image.get_rect(center=(card.rect.x + 28, card.rect.centery - 2)))
+        name_font = self.font_xs if self.font_xs.size(config.name)[0] <= 72 else get_font(14)
+        name = name_font.render(config.name, True, COLORS["paper"] if affordable else COLORS["muted"])
+        price_text = str(cost_value) if affordable else f"差{cost_value - self.charcoal}"
+        price_font = self.font_sm if affordable else self.font_xs
+        price = price_font.render(price_text, True, COLORS["gold"] if affordable else (216, 102, 83))
+        self.screen.blit(name, (card.rect.x + 50, card.rect.y + 14))
+        self.screen.blit(price, (card.rect.x + 50, card.rect.y + 41))
+
     def _draw_grid(self) -> None:
         mouse_cell = self.pos_to_cell(pygame.mouse.get_pos())
         for row in range(GRID_ROWS):
@@ -1833,10 +2215,51 @@ class Game:
                 tile = self.tray_image.copy()
                 if col >= PLACEABLE_COLS:
                     dark = pygame.Surface(tile.get_size(), pygame.SRCALPHA)
-                    dark.fill((20, 18, 16, 86))
+                    dark.fill((20, 18, 16, 54 if self.is_reverse_mode else 86))
                     tile.blit(dark, (0, 0))
                 self.screen.blit(tile, (rect.x + 4, rect.y + 4))
-                pygame.draw.rect(self.screen, (105, 78, 53), rect.inflate(-8, -8), 1, border_radius=8)
+                pygame.draw.ellipse(
+                    self.screen,
+                    (226, 211, 173),
+                    (rect.x + 15, rect.y + 12, CELL_SIZE - 34, 5),
+                    1,
+                )
+                mark_seed = row * 17 + col * 11
+                if mark_seed % 3 == 0:
+                    pygame.draw.arc(
+                        self.screen,
+                        (72, 48, 34),
+                        (rect.x + 25, rect.y + 34, 31, 22),
+                        0.3,
+                        2.5,
+                        2,
+                    )
+                if self.reverse_hot_lane == row and self.game_time < self.reverse_hot_until:
+                    heat = pygame.Surface((CELL_SIZE - 10, CELL_SIZE - 10), pygame.SRCALPHA)
+                    heat.fill((255, 119, 35, 30))
+                    self.screen.blit(heat, (rect.x + 5, rect.y + 5))
+                border_color = (137, 91, 51) if col < PLACEABLE_COLS else (125, 69, 55)
+                pygame.draw.rect(self.screen, border_color, rect.inflate(-8, -8), 2, border_radius=8)
+                occupying_unit = self.unit_at(row, col)
+                if occupying_unit and occupying_unit.hp < occupying_unit.max_hp * 0.5:
+                    damage_color = (203, 75, 47)
+                    pygame.draw.line(self.screen, damage_color, (rect.x + 17, rect.y + 22), (rect.x + 30, rect.y + 34), 2)
+                    pygame.draw.line(self.screen, damage_color, (rect.x + 30, rect.y + 34), (rect.x + 24, rect.y + 47), 2)
+                if (pygame.time.get_ticks() // 500 + mark_seed) % 13 == 0 and col < PLACEABLE_COLS:
+                    steam = pygame.Surface((CELL_SIZE, 30), pygame.SRCALPHA)
+                    pygame.draw.arc(steam, (245, 237, 218, 72), (19, 7, 17, 22), 2.5, 5.1, 2)
+                    pygame.draw.arc(steam, (245, 237, 218, 52), (36, 1, 15, 23), 2.3, 5.0, 2)
+                    self.screen.blit(steam, (rect.x, rect.y - 12))
+                if self.is_reverse_mode and col == GRID_COLS - 1:
+                    active_lane = mouse_cell is not None and mouse_cell[0] == row and self.selected_enemy is not None
+                    can_afford = self.selected_enemy is not None and self.charcoal >= REVERSE_ZOMBIE_COSTS[self.selected_enemy]
+                    gate_color = ((247, 177, 65) if can_afford else (221, 73, 55)) if active_lane else (164, 68, 50)
+                    pygame.draw.rect(self.screen, gate_color, rect.inflate(-14, -14), 3, border_radius=8)
+                    pygame.draw.polygon(
+                        self.screen,
+                        gate_color,
+                        [(rect.centerx - 12, rect.centery), (rect.centerx + 8, rect.centery - 11), (rect.centerx + 8, rect.centery + 11)],
+                    )
                 if self.level_config.special == "conveyor" and col < PLACEABLE_COLS:
                     arrow_color = (255, 196, 82) if self.conveyor_flash_timer > 0 else (136, 101, 67)
                     cy = rect.y + 16
@@ -1847,7 +2270,9 @@ class Game:
                         [(rect.right - 13, cy), (rect.right - 20, cy - 5), (rect.right - 20, cy + 5)],
                     )
                 if mouse_cell == (row, col) and self.state == "playing":
-                    if self.remove_mode:
+                    if self.is_reverse_mode:
+                        pygame.draw.rect(self.screen, (235, 154, 64), rect.inflate(-12, -12), 2, border_radius=8)
+                    elif self.remove_mode:
                         removable = self.unit_at(row, col) is not None
                         preview = pygame.transform.smoothscale(self.tongs_image, (56, 48)).copy()
                         preview.set_alpha(190 if removable else 90)
@@ -1872,6 +2297,19 @@ class Game:
                             self.screen.blit(warning, (rect.x + 9, rect.y + 9))
                     else:
                         pygame.draw.rect(self.screen, (190, 153, 102), rect.inflate(-14, -14), 2, border_radius=8)
+        if self.is_reverse_mode and mouse_cell is not None and self.selected_enemy is not None:
+            row = mouse_cell[0]
+            can_afford = self.charcoal >= REVERSE_ZOMBIE_COSTS[self.selected_enemy]
+            lane_overlay = pygame.Surface((GRID_COLS * CELL_SIZE, CELL_SIZE - 10), pygame.SRCALPHA)
+            lane_overlay.fill((255, 170, 57, 34) if can_afford else (220, 56, 48, 38))
+            self.screen.blit(lane_overlay, (GRID_X, GRID_Y + row * CELL_SIZE + 5))
+            pygame.draw.rect(
+                self.screen,
+                (255, 188, 76) if can_afford else (230, 75, 61),
+                (GRID_X, GRID_Y + row * CELL_SIZE + 5, GRID_COLS * CELL_SIZE, CELL_SIZE - 10),
+                2,
+                border_radius=8,
+            )
         if self.flash_cell and self.flash_timer > 0:
             row, col = self.flash_cell
             rect = pygame.Rect(GRID_X + col * CELL_SIZE, GRID_Y + row * CELL_SIZE, CELL_SIZE, CELL_SIZE)
@@ -1892,6 +2330,16 @@ class Game:
         else:
             self.screen.blit(self.grill_image, (42, GRID_Y - 8))
         pygame.draw.line(self.screen, (255, 152, 67), (DEFENSE_LINE_X, GRID_Y - 8), (DEFENSE_LINE_X, GRID_Y + GRID_ROWS * CELL_SIZE + 8), 3)
+        if self.is_reverse_mode:
+            panel = pygame.Rect(76, GRID_Y + 306, 154, 72)
+            self._draw_themed_panel(panel, (47, 33, 27), (202, 124, 53))
+            title = self.font_xs.render("烤炉耐久", True, COLORS["paper"])
+            self.screen.blit(title, title.get_rect(center=(panel.centerx, panel.y + 18)))
+            for index in range(self.reverse_core_max_hp):
+                center = (panel.x + 49 + index * 29, panel.y + 47)
+                alive = index < self.reverse_core_hp
+                pygame.draw.circle(self.screen, (255, 102, 42) if alive else (65, 58, 54), center, 10)
+                pygame.draw.circle(self.screen, (255, 221, 92) if alive else (100, 92, 86), (center[0] + 3, center[1] - 3), 4)
 
     def _draw_conveyor_status(self) -> None:
         remaining = max(0, math.ceil(self.conveyor_next_shift - self.game_time))
@@ -1924,6 +2372,55 @@ class Game:
         center_x = rect.centerx + (14 if active else 0)
         self.screen.blit(text, text.get_rect(center=(center_x, rect.centery)))
 
+    def _draw_reverse_previews(self) -> None:
+        for preview in self.reverse_previews:
+            x, y = cell_center(preview.row, preview.col)
+            remaining = max(0, math.ceil(preview.spawn_time - self.game_time))
+            pulse = 120 + int(45 * (1 + math.sin(pygame.time.get_ticks() / 130)))
+            image = pygame.transform.smoothscale(self.card_images[preview.unit_type], (58, 58)).copy()
+            image.set_alpha(max(90, min(200, pulse)))
+            self.screen.blit(image, image.get_rect(center=(x, y + 8)))
+            pygame.draw.rect(self.screen, (255, 187, 74), (x - 32, y - 31, 64, 64), 2, border_radius=8)
+            label = self.font_xs.render(f"{remaining}s", True, (255, 235, 177))
+            self.screen.blit(label, label.get_rect(center=(x, y - 34)))
+        if self.reverse_hot_lane is not None and self.game_time < self.reverse_hot_until:
+            remaining = max(0, math.ceil(self.reverse_hot_until - self.game_time))
+            rect = pygame.Rect(GRID_X, GRID_Y - 38, 330, 32)
+            self._draw_themed_panel(rect, (73, 39, 28), (255, 142, 55))
+            text = self.font_xs.render(
+                f"今日热卖：第 {self.reverse_hot_lane + 1} 路 · 吃肉返还 ×1.5 · {remaining}s",
+                True,
+                COLORS["paper"],
+            )
+            self.screen.blit(text, text.get_rect(center=rect.center))
+
+    def _draw_reverse_hud(self) -> None:
+        rect = pygame.Rect(18, HEIGHT - 74, 330, 60)
+        self._draw_themed_panel(rect, (47, 36, 31), (151, 91, 58), metal=True)
+        title = self.font_xs.render("僵尸夜宵突袭", True, (255, 197, 102))
+        stats = self.font_xs.render(
+            f"吃掉 {self.reverse_eaten_units}  ·  损失 {self.reverse_zombies_lost}  ·  拖到任意路线投放",
+            True,
+            COLORS["paper"],
+        )
+        self.screen.blit(title, (rect.x + 14, rect.y + 9))
+        self.screen.blit(stats, (rect.x + 14, rect.y + 32))
+
+    def _draw_dragged_enemy(self) -> None:
+        if self.dragging_enemy is None:
+            return
+        image = pygame.transform.smoothscale(self.enemy_card_images[self.dragging_enemy], (66, 78)).copy()
+        image.set_alpha(178)
+        self.screen.blit(image, image.get_rect(center=self.drag_position))
+        affordable = self.charcoal >= REVERSE_ZOMBIE_COSTS[self.dragging_enemy]
+        pygame.draw.circle(
+            self.screen,
+            (255, 186, 68) if affordable else (229, 68, 55),
+            self.drag_position,
+            41,
+            3,
+        )
+
     def _roulette_rect(self) -> pygame.Rect:
         return pygame.Rect(48, GRID_Y + 72, 190, 190)
 
@@ -1953,6 +2450,23 @@ class Game:
 
     def _draw_progress_bar(self) -> None:
         rect = pygame.Rect(WIDTH - 330, 68, 300, 16)
+        if self.is_reverse_mode:
+            progress = max(0.0, min(1.0, self.game_time / self.reverse_duration))
+            pygame.draw.rect(self.screen, (47, 38, 34), rect, border_radius=8)
+            fill = rect.copy()
+            fill.width = int(rect.width * progress)
+            pygame.draw.rect(self.screen, (173, 65, 46), fill, border_radius=8)
+            if fill.width > 4:
+                pygame.draw.line(self.screen, (255, 151, 77), (fill.x + 3, fill.y + 3), (fill.right - 3, fill.y + 3), 2)
+            pygame.draw.rect(self.screen, (229, 194, 132), rect, 1, border_radius=8)
+            remaining = max(0, math.ceil(self.reverse_duration - self.game_time))
+            label = self.font_xs.render(
+                f"剩余 {remaining}s · 烤炉耐久 {self.reverse_core_hp}/{self.reverse_core_max_hp}",
+                True,
+                COLORS["paper"],
+            )
+            self.screen.blit(label, (rect.x, rect.y + 18))
+            return
         progress = 0 if self.total_enemies <= 0 else self.defeated_enemies / self.total_enemies
         pygame.draw.rect(self.screen, (54, 44, 38), rect, border_radius=8)
         fill = rect.copy()
@@ -1984,8 +2498,13 @@ class Game:
         pygame.draw.rect(self.screen, COLORS["gold"], panel, 3, border_radius=8)
         title = self.font_lg.render("游戏简介", True, COLORS["paper"])
         self.screen.blit(title, (panel.x + 34, panel.y + 24))
+        intro = (
+            "反向关卡中拖动顶部僵尸到任意路线；吃掉肉肉返还炭火，三次突破即可攻破烤炉。"
+            if self.is_reverse_mode
+            else "点击烧烤架或木炭生成的炭火获得资源；击败僵尸的炭火自动收集。油瓶可释放肉肉大招，每关会清零。"
+        )
         self._draw_wrapped_text(
-            "点击烧烤架或木炭生成的炭火获得资源；击败僵尸的炭火自动收集。油瓶可释放肉肉大招，每关会清零。",
+            intro,
             panel.x + 34,
             panel.y + 82,
             1180,
@@ -2093,6 +2612,14 @@ class Game:
         self.screen.blit(label, label.get_rect(center=rect.center))
 
     def _resource_tuning_items(self) -> list[tuple[str, str, Callable[[int], None]]]:
+        if self.is_reverse_mode:
+            return [
+                ("初始炭火军费", str(self.reverse_starting_charcoal), lambda direction: self._change_attr("reverse_starting_charcoal", direction, 10, 35, 999, True)),
+                ("突袭时限(秒)", f"{self.reverse_duration:.0f}", lambda direction: self._change_attr("reverse_duration", direction, 5, 45, 300, False)),
+                ("烤炉耐久", str(self.reverse_core_max_hp), lambda direction: self._change_attr("reverse_core_max_hp", direction, 1, 1, 9, True)),
+                ("热卖路线间隔(秒)", f"{self.reverse_hot_interval:.0f}", lambda direction: self._change_attr("reverse_hot_interval", direction, 2, 8, 60, False)),
+                ("吃肉返还比例", f"{self.reverse_reward_percent}%", lambda direction: self._change_attr("reverse_reward_percent", direction, 5, 20, 100, True)),
+            ]
         return [
             ("初始炭火值", str(self.initial_charcoal), lambda direction: self._change_attr("initial_charcoal", direction, 25, 0, 999, True)),
             ("烧烤架生成间隔(秒，越小越快)", f"{self.grill_interval:.1f}", lambda direction: self._change_attr("grill_interval", direction, 0.5, 1.0, 30.0, False)),
@@ -2250,9 +2777,13 @@ class Game:
         if self.state == "win":
             unlock_text = "全部关卡已完成" if self.selected_level == len(LEVELS) else f"第 {self.selected_level + 1} 关已解锁"
             subtitle = f"{unlock_text}  ·  奖励 {self.level_reward} 金币"
-            self._draw_center_banner(f"第 {self.selected_level} 关通过", subtitle)
+            title = "烤炉已攻破" if self.is_reverse_mode else f"第 {self.selected_level} 关通过"
+            self._draw_center_banner(title, subtitle)
         else:
-            self._draw_center_banner(f"第 {self.selected_level} 关失守", "僵尸冲进烧烤摊了")
+            if self.is_reverse_mode:
+                self._draw_center_banner("夜宵突袭失败", "系统摊主守住了烤炉")
+            else:
+                self._draw_center_banner(f"第 {self.selected_level} 关失守", "僵尸冲进烧烤摊了")
         if self.state == "win" and self.selected_level < len(LEVELS):
             self._draw_button(self._button_rect("next_level"), "下一关", True)
         self._draw_button(self._button_rect("restart"), "重玩本关", self.state != "win" or self.selected_level == len(LEVELS))

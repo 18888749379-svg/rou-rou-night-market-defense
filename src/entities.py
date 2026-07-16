@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import pygame
@@ -71,6 +72,8 @@ class Unit:
         return rect
 
     def update(self, dt: float, game: "Game") -> None:
+        if not self.alive:
+            return
         if self.ultimate_timer > 0:
             self.ultimate_timer = max(0.0, self.ultimate_timer - dt)
         if self.cooldown > 0:
@@ -151,6 +154,7 @@ class Unit:
                 enemy.take_damage(int(round(self.config.damage * self.damage_multiplier)), game)
                 hit_any = True
         game.effects.append(Explosion(boom_x, boom_y))
+        game.trigger_shake(4, 0.20)
         game.floaters.append(FloatingText("爆炸!", boom_x, boom_y - 36, (255, 210, 88), 0.75))
         if not hit_any:
             game.floaters.append(FloatingText("空爆", boom_x, boom_y + 8, (255, 180, 120), 0.6))
@@ -158,6 +162,8 @@ class Unit:
         game.audio.play("attack_meatball")
 
     def _update_charcoal(self, dt: float, game: "Game") -> None:
+        if game.is_reverse_mode:
+            return
         self.age += dt
         self.timer += dt
         if self.timer < self.config.cooldown:
@@ -184,6 +190,7 @@ class Unit:
             if enemy.alive and enemy.row == self.row and abs(enemy.x - self.rect.centerx) <= CELL_SIZE * 1.45:
                 enemy.take_damage(self.config.damage, game)
         game.effects.append(Explosion(self.rect.centerx, self.rect.centery))
+        game.trigger_shake(4, 0.18)
         game.floaters.append(FloatingText("鸡蛋爆破!", self.rect.centerx, self.rect.top - 8, (255, 219, 105), 0.8))
         self.alive = False
         game.audio.play("attack_meatball")
@@ -282,11 +289,15 @@ class Unit:
     def _draw_hp(self, surface: pygame.Surface) -> None:
         if self.hp >= self.max_hp:
             return
-        bar = pygame.Rect(self.rect.left + 8, self.rect.bottom - 8, self.rect.width - 16, 6)
-        pygame.draw.rect(surface, (70, 30, 30), bar, border_radius=3)
+        bar = pygame.Rect(self.rect.left + 6, self.rect.bottom - 9, self.rect.width - 12, 8)
+        pygame.draw.rect(surface, (48, 43, 40), bar.inflate(4, 4), border_radius=4)
+        pygame.draw.rect(surface, (143, 112, 72), bar.inflate(4, 4), 1, border_radius=4)
+        pygame.draw.rect(surface, (42, 18, 16), bar, border_radius=3)
         fill = bar.copy()
         fill.width = int(bar.width * max(0, self.hp) / self.max_hp)
-        pygame.draw.rect(surface, (83, 203, 110), fill, border_radius=3)
+        pygame.draw.rect(surface, (179, 55, 39), fill, border_radius=3)
+        if fill.width > 3:
+            pygame.draw.line(surface, (255, 145, 95), (fill.x + 2, fill.y + 2), (fill.right - 2, fill.y + 2), 1)
 
 
 class Enemy:
@@ -300,6 +311,8 @@ class Enemy:
         self.hp = self.config.hp
         self.attack_timer = 0.0
         self.slow_timer = 0.0
+        self.animation_time = 0.0
+        self.hurt_timer = 0.0
         self.alive = True
         sizes = {
             "baby": (46, 58),
@@ -319,6 +332,10 @@ class Enemy:
         return x_to_col(self.x)
 
     def update(self, dt: float, game: "Game") -> None:
+        if not self.alive:
+            return
+        self.animation_time += dt
+        self.hurt_timer = max(0.0, self.hurt_timer - dt)
         self.rect.center = (int(self.x), int(self.y))
         if self.slow_timer > 0:
             self.slow_timer -= dt
@@ -327,7 +344,14 @@ class Enemy:
         if self.target:
             self.attack_timer -= dt
             if self.attack_timer <= 0:
-                self.target.take_damage(self.config.damage)
+                target = self.target
+                was_alive = target.alive
+                target.take_damage(self.config.damage)
+                game.effects.append(ImpactBurst(target.rect.centerx, target.rect.centery, "grease"))
+                if self.config.damage >= 50:
+                    game.trigger_shake(2, 0.10)
+                if was_alive and not target.alive:
+                    game.on_unit_eaten(target, self)
                 self.attack_timer = self.config.cooldown
                 game.audio.play("hit")
         elif not blocked_by_enemy:
@@ -354,17 +378,29 @@ class Enemy:
 
     def take_damage(self, amount: int, game: "Game") -> None:
         self.hp -= amount
+        self.hurt_timer = 0.13
         game.floaters.append(FloatingText(f"-{amount}", self.x, self.rect.top, (255, 236, 124)))
+        game.effects.append(ImpactBurst(int(self.x), int(self.y), "spark"))
         if self.hp <= 0:
             self.alive = False
-            game.floaters.append(FloatingText(f"+{self.config.reward}", self.x, self.y, (255, 189, 71), 0.7))
-            game.add_charcoal_auto(self.config.reward, self.x, self.y - 18)
+            if game.is_reverse_mode:
+                game.on_reverse_enemy_lost(self)
+            else:
+                game.floaters.append(FloatingText(f"+{self.config.reward}", self.x, self.y, (255, 189, 71), 0.7))
+                game.add_charcoal_auto(self.config.reward, self.x, self.y - 18)
 
     def apply_slow(self, seconds: float) -> None:
         self.slow_timer = max(self.slow_timer, seconds)
 
     def draw(self, surface: pygame.Surface) -> None:
-        surface.blit(self.image, self.rect)
+        moving = self.target is None
+        bob = int(math.sin(self.animation_time * 8.0) * 2) if moving else 0
+        lunge = -3 if self.target is not None and self.attack_timer < self.config.cooldown * 0.35 else 0
+        draw_rect = self.rect.move(lunge, bob)
+        image = self.image.copy() if self.hurt_timer > 0 else self.image
+        if self.hurt_timer > 0:
+            image.fill((74, 15, 10, 0), special_flags=pygame.BLEND_RGBA_ADD)
+        surface.blit(image, draw_rect)
         if self.slow_timer > 0:
             frost = pygame.Surface((self.rect.width + 18, self.rect.height + 12), pygame.SRCALPHA)
             pygame.draw.ellipse(frost, (118, 226, 255, 150), frost.get_rect(), 3)
@@ -372,11 +408,15 @@ class Enemy:
         self._draw_hp(surface)
 
     def _draw_hp(self, surface: pygame.Surface) -> None:
-        bar = pygame.Rect(self.rect.left + 8, self.rect.top - 10, self.rect.width - 16, 6)
-        pygame.draw.rect(surface, (76, 35, 35), bar, border_radius=3)
+        bar = pygame.Rect(self.rect.left + 6, self.rect.top - 12, self.rect.width - 12, 8)
+        pygame.draw.rect(surface, (40, 43, 35), bar.inflate(4, 4), border_radius=4)
+        pygame.draw.rect(surface, (132, 113, 77), bar.inflate(4, 4), 1, border_radius=4)
+        pygame.draw.rect(surface, (20, 35, 18), bar, border_radius=3)
         fill = bar.copy()
         fill.width = int(bar.width * max(0, self.hp) / self.max_hp)
-        pygame.draw.rect(surface, (222, 80, 70), fill, border_radius=3)
+        pygame.draw.rect(surface, (91, 173, 67), fill, border_radius=3)
+        if fill.width > 3:
+            pygame.draw.line(surface, (180, 234, 114), (fill.x + 2, fill.y + 2), (fill.right - 2, fill.y + 2), 1)
 
 
 class Projectile:
@@ -445,6 +485,7 @@ class Projectile:
                     game.effects.append(GarlicBurst(int(enemy.x), int(enemy.y)))
                 if self.slow_seconds > 0:
                     enemy.apply_slow(self.slow_seconds)
+                    game.effects.append(ImpactBurst(int(enemy.x), int(enemy.y), "frost"))
                 self.hit_ids.add(enemy_id)
                 if not self.boomerang:
                     self.alive = False
@@ -472,6 +513,48 @@ class Projectile:
             image = pygame.transform.rotate(self.image, self.angle)
         rect = image.get_rect(center=self.rect.center)
         surface.blit(image, rect)
+
+
+class ImpactBurst:
+    COLORS = {
+        "spark": ((255, 211, 86), (255, 116, 47)),
+        "grease": ((255, 178, 72), (135, 54, 32)),
+        "frost": ((213, 251, 255), (92, 205, 244)),
+        "garlic": ((255, 239, 174), (158, 196, 83)),
+    }
+
+    def __init__(self, x: int, y: int, kind: str = "spark") -> None:
+        self.x = x
+        self.y = y
+        self.kind = kind
+        self.ttl = 0.32
+        self.max_ttl = self.ttl
+        self.colors = self.COLORS.get(kind, self.COLORS["spark"])
+        self.particles = []
+        phase = (x * 0.037 + y * 0.021) % (math.pi * 2)
+        for index in range(8):
+            angle = phase + index * math.pi / 4
+            speed = 32 + (index % 3) * 13
+            self.particles.append((angle, speed, 2 + index % 2))
+
+    @property
+    def alive(self) -> bool:
+        return self.ttl > 0
+
+    def update(self, dt: float) -> None:
+        self.ttl -= dt
+
+    def draw(self, surface: pygame.Surface) -> None:
+        progress = 1.0 - max(0.0, self.ttl) / self.max_ttl
+        alpha = max(0, int(230 * (1.0 - progress)))
+        layer = pygame.Surface((96, 96), pygame.SRCALPHA)
+        for index, (angle, speed, size) in enumerate(self.particles):
+            distance = speed * progress
+            px = 48 + int(math.cos(angle) * distance)
+            py = 48 + int(math.sin(angle) * distance + 22 * progress * progress)
+            color = self.colors[index % len(self.colors)]
+            pygame.draw.circle(layer, (*color, alpha), (px, py), size)
+        surface.blit(layer, (self.x - 48, self.y - 48))
 
 
 class Explosion:

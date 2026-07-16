@@ -74,11 +74,33 @@ def main() -> None:
         game.oil_pickups = [OilPickup(1170, 305)]
         save_frame(game, "order-battle.png")
 
+        game.selected_level = 11
+        game._apply_level_tuning(11)
+        game.reset_game()
+        game.state = "playing"
+        game.game_time = 40.0
+        game.charcoal = 620
+        game._update_reverse_director()
+        game.reverse_hot_lane = 2
+        game.reverse_hot_until = 49.0
+        for enemy_type, row in [("pot", 0), ("baby", 1), ("butcher", 2), ("courier", 3), ("normal", 4)]:
+            game.spawn_reverse_enemy(enemy_type, row)
+        for index, enemy in enumerate(game.enemies):
+            enemy.x -= 85 + index * 42
+            enemy.rect.centerx = int(enemy.x)
+        game.floaters = []
+        game.charcoal = 360
+        game.selected_enemy = "drunk"
+        game.message = "第 3 路今日热卖：吃掉肉肉返还 ×1.5"
+        game.message_timer = 3.0
+        save_frame(game, "reverse-raid.png")
+
         game.state = "shop"
         game.coins = 188
         game.owned_units = ["charcoal", "wall", "skewer", "meatball", "beef", "wing"]
         game.login_message = ""
         save_frame(game, "shop.png")
+
         pygame.quit()
 
     print(f"Screenshots written to {OUTPUT_DIR}")
