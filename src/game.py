@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import math
 import random
 from dataclasses import dataclass
@@ -220,7 +221,7 @@ class Game:
         self.font_lg = get_font(48, True)
         self.font_title = get_font(68, True)
         self.running = True
-        self.state = "menu"
+        self.state = "home"
         self.selected_unit: str | None = None
         self.remove_mode = False
         self.message = ""
@@ -274,8 +275,12 @@ class Game:
         self.login_composition = ""
         self.login_replace_existing = False
         self.login_message = ""
-        self.post_login_state = "menu"
+        self.login_required = False
+        self.post_login_state = "home"
         self.login_source_account: str | None = None
+        self.login_account_page = 0
+        self.info_return_state = "home"
+        self.reset_return_state = "home"
         self.loadout_selection: list[str] = []
         self.reset_confirm_stage = 0
         self.level_reward = 0
@@ -301,6 +306,12 @@ class Game:
         self.reset_game()
         self._save_all()
         self.audio.play_music("menu")
+        self._open_login(
+            "home",
+            None,
+            "用户名仅支持英文字母和数字；同名读取存档，新名字从零开始",
+            required=True,
+        )
 
     @staticmethod
     def _load_cover_image(name: str) -> pygame.Surface:
@@ -656,11 +667,20 @@ class Game:
 
     def run(self) -> None:
         while self.running:
-            dt = self.clock.tick(FPS) / 1000.0
-            self.handle_events()
-            self.update(dt)
-            self.draw()
+            self._run_frame()
         pygame.quit()
+
+    async def run_async(self) -> None:
+        while self.running:
+            self._run_frame()
+            await asyncio.sleep(0)
+        pygame.quit()
+
+    def _run_frame(self) -> None:
+        dt = self.clock.tick(FPS) / 1000.0
+        self.handle_events()
+        self.update(dt)
+        self.draw()
 
     def handle_events(self) -> None:
         for event in pygame.event.get():
@@ -672,10 +692,17 @@ class Game:
                     self.login_replace_existing = False
                 room = 12 - len(self.login_text)
                 if room > 0:
-                    self.login_text += event.text[:room]
+                    accepted = "".join(char for char in event.text if char.isascii() and char.isalnum())
+                    self.login_text += accepted[:room]
+                    if accepted != event.text:
+                        self.login_message = "用户名只能使用英文字母或数字"
+                    elif accepted:
+                        self.login_message = ""
                 self.login_composition = ""
             elif event.type == pygame.TEXTEDITING and self.state == "login":
-                self.login_composition = event.text
+                self.login_composition = ""
+                if event.text:
+                    self.login_message = "请切换到英文输入法，只能输入字母或数字"
             elif event.type == pygame.KEYDOWN:
                 self._handle_key(event.key)
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
@@ -713,9 +740,13 @@ class Game:
                 else:
                     self.login_text = self.login_text[:-1]
             return
-        if self.state in {"loadout", "shop", "skills", "reset_confirm"}:
+        if self.state in {"loadout", "shop", "skills"}:
             if key == pygame.K_ESCAPE:
                 self.state = "menu"
+            return
+        if self.state == "reset_confirm":
+            if key == pygame.K_ESCAPE:
+                self.state = self.reset_return_state
                 self.reset_confirm_stage = 0
             return
         if self.state == "tuning":
@@ -725,7 +756,7 @@ class Game:
             return
         if self.state == "menu_info":
             if key in {pygame.K_ESCAPE, pygame.K_i}:
-                self.state = "menu"
+                self.state = self.info_return_state
                 self.show_info = False
             return
         if self.state == "playing" and self.exit_confirm:
@@ -752,10 +783,13 @@ class Game:
                 if self.state == "win":
                     self._select_level(self.unlocked_level)
                     self._save_all()
-                self.state = "menu"
+                self.state = "home"
                 self.audio.play_music("menu")
                 return
             if self.state == "menu":
+                self.state = "home"
+                return
+            if self.state == "home":
                 self.running = False
                 return
             else:
@@ -783,6 +817,8 @@ class Game:
                 self.show_tuning = not self.show_tuning
                 if self.show_tuning:
                     self._cancel_action_modes()
+        elif self.state == "home" and key in {pygame.K_RETURN, pygame.K_SPACE}:
+            self.state = "menu"
         elif self.state == "menu" and key in {pygame.K_RETURN, pygame.K_SPACE}:
             self._open_loadout()
         elif self.state == "menu" and key == pygame.K_t:
@@ -858,6 +894,25 @@ class Game:
             if self.ending_timer >= 0.65:
                 self._finish_ending()
             return
+        if self.state == "home":
+            if self._button_rect("home_start").collidepoint(pos):
+                self.state = "menu"
+                self.audio.play("click")
+                return
+            if self._button_rect("home_info").collidepoint(pos):
+                self.info_return_state = "home"
+                self.show_info = True
+                self.state = "menu_info"
+                self.audio.play("click")
+                return
+            if self._button_rect("home_reset").collidepoint(pos):
+                self.reset_confirm_stage = 1
+                self.reset_return_state = "home"
+                self.state = "reset_confirm"
+                return
+            if self._button_rect("account").collidepoint(pos):
+                self._open_login("home", None, "选择本地账户，或输入新用户名创建账户")
+                return
         if self.state == "menu":
             for index, level in enumerate(LEVELS):
                 if self._level_rect(index).collidepoint(pos):
@@ -872,7 +927,7 @@ class Game:
                 self._open_loadout()
                 return
             if self._button_rect("account").collidepoint(pos):
-                self._open_login("menu", self.active_account)
+                self._open_login("menu", None, "选择本地账户，或输入新用户名创建账户")
                 return
             if self._button_rect("shop").collidepoint(pos):
                 self._require_account("shop")
@@ -880,24 +935,38 @@ class Game:
             if self._button_rect("skills").collidepoint(pos):
                 self._require_account("skills")
                 return
-            if self._button_rect("reset_data").collidepoint(pos):
-                self.reset_confirm_stage = 1
-                self.state = "reset_confirm"
-                return
-            if self._button_rect("menu_info").collidepoint(pos):
-                self.show_info = True
-                self.state = "menu_info"
-                self.audio.play("click")
-                return
             if self._button_rect("menu_tuning").collidepoint(pos):
                 self.show_tuning = True
                 self.state = "tuning"
                 self.audio.play("click")
                 return
+            if self._button_rect("screen_back").collidepoint(pos):
+                self.state = "home"
+                self.audio.play("click")
+                return
         if self.state == "login":
+            account_names = self._visible_login_accounts()
+            for index, name in enumerate(account_names):
+                if self._login_account_rect(index).collidepoint(pos):
+                    self._switch_account(name)
+                    return
+            if len(self.accounts) > 6:
+                if self._button_rect("login_prev").collidepoint(pos):
+                    self.login_account_page = max(0, self.login_account_page - 1)
+                    return
+                if self._button_rect("login_next").collidepoint(pos):
+                    last_page = (len(self.accounts) - 1) // 6
+                    self.login_account_page = min(last_page, self.login_account_page + 1)
+                    return
+            if self.active_account and self._button_rect("login_rename").collidepoint(pos):
+                self.login_source_account = self.active_account
+                self.login_text = self.active_account
+                self.login_replace_existing = True
+                self.login_message = "输入新的英文或数字用户名，确认后保留全部进度"
+                return
             if self._button_rect("login_confirm").collidepoint(pos):
                 self._login_or_create()
-            elif self._button_rect("screen_back").collidepoint(pos):
+            elif self._button_rect("login_back").collidepoint(pos):
                 self._close_login()
             return
         if self.state == "loadout":
@@ -951,14 +1020,14 @@ class Game:
                 return
             if self._button_rect("reset_cancel").collidepoint(pos):
                 self.reset_confirm_stage = 0
-                self.state = "menu"
+                self.state = self.reset_return_state
             return
         if self.state == "tuning":
             self._handle_tuning_click(pos, return_to_menu=True)
             return
         if self.state == "menu_info":
             if self._button_rect("close_info").collidepoint(pos):
-                self.state = "menu"
+                self.state = self.info_return_state
                 self.show_info = False
                 self.audio.play("click")
                 return
@@ -974,7 +1043,7 @@ class Game:
                 if self.state == "win":
                     self._select_level(self.unlocked_level)
                     self._save_all()
-                self.state = "menu"
+                self.state = "home"
                 self.audio.play_music("menu")
                 return
         if self.state != "playing":
@@ -1106,7 +1175,7 @@ class Game:
         self.exit_confirm = False
         self.paused = False
         self._save_all()
-        self.state = "menu"
+        self.state = "home"
         self.audio.play_music("menu")
         self.audio.play("click")
 
@@ -1144,28 +1213,46 @@ class Game:
             return
         self._open_login(target_state, None, "请先输入本地玩家名")
 
-    def _open_login(self, target_state: str, source_account: str | None, message: str = "") -> None:
+    def _open_login(
+        self,
+        target_state: str,
+        source_account: str | None,
+        message: str = "",
+        required: bool = False,
+    ) -> None:
         self.login_text = source_account or ""
         self.login_composition = ""
         self.login_replace_existing = source_account is not None
         self.login_message = message
         self.post_login_state = target_state
         self.login_source_account = source_account
+        self.login_required = required
+        account_names = sorted(self.accounts, key=str.casefold)
+        self.login_account_page = account_names.index(self.active_account) // 6 if self.active_account in account_names else 0
         self.state = "login"
         pygame.key.start_text_input()
 
     def _close_login(self) -> None:
+        if self.login_required:
+            self.login_message = "请先输入本地玩家名"
+            self.audio.play("bad")
+            return
         pygame.key.stop_text_input()
         self.login_composition = ""
         self.login_source_account = None
         self.login_replace_existing = False
-        self.post_login_state = "menu"
-        self.state = "menu"
+        self.login_required = False
+        self.post_login_state = "home"
+        self.state = "home"
 
     def _login_or_create(self) -> None:
         name = self.login_text.strip()
         if not name:
             self.login_message = "玩家名不能为空"
+            self.audio.play("bad")
+            return
+        if not all(char.isascii() and char.isalnum() for char in name):
+            self.login_message = "用户名只能使用英文字母或数字"
             self.audio.play("bad")
             return
         source = self.login_source_account
@@ -1181,16 +1268,34 @@ class Game:
         self._load_active_account()
         self.cards = self._make_cards()
         self._save_all()
+        self._finish_login()
+
+    def _switch_account(self, name: str) -> None:
+        if name not in self.accounts:
+            return
+        self.active_account = name
+        self._load_active_account()
+        self.cards = self._make_cards()
+        self._save_all()
+        self._finish_login()
+
+    def _finish_login(self) -> None:
         target = self.post_login_state
         pygame.key.stop_text_input()
         self.login_source_account = None
-        self.post_login_state = "menu"
-        self.state = "menu"
+        self.login_replace_existing = False
+        self.login_required = False
+        self.post_login_state = "home"
+        self.login_message = ""
+        self.state = target if target in {"home", "menu", "shop", "skills"} else "home"
         if target == "loadout":
             self._open_loadout()
-        elif target in {"shop", "skills"}:
-            self.state = target
         self.audio.play("click")
+
+    def _visible_login_accounts(self) -> list[str]:
+        names = sorted(self.accounts, key=str.casefold)
+        start = self.login_account_page * 6
+        return names[start:start + 6]
 
     def _open_loadout(self) -> None:
         if not self.active_account:
@@ -1293,8 +1398,13 @@ class Game:
         self._load_active_account()
         self.cards = self._make_cards()
         self.reset_confirm_stage = 0
-        self.state = "menu"
         self._save_all()
+        self._open_login(
+            "home",
+            None,
+            "数据已清空，请输入英文或数字用户名创建新账户",
+            required=True,
+        )
 
     def pos_to_cell(self, pos: tuple[int, int]) -> tuple[int, int] | None:
         x, y = pos
@@ -1873,16 +1983,24 @@ class Game:
 
     def draw(self) -> None:
         self._draw_background()
-        if self.state == "menu":
+        if self.state == "home":
+            self._draw_home()
+        elif self.state == "menu":
             self._draw_menu()
         elif self.state == "menu_info":
-            self._draw_menu()
+            if self.info_return_state == "home":
+                self._draw_home()
+            else:
+                self._draw_menu()
             self._draw_info_overlay()
         elif self.state == "tuning":
             self._draw_menu()
             self._draw_tuning_overlay(return_to_menu=True)
         elif self.state == "login":
-            self._draw_menu()
+            if self.post_login_state == "home":
+                self._draw_home()
+            else:
+                self._draw_menu()
             self._draw_login_overlay()
         elif self.state == "loadout":
             self._draw_collection_screen("出战肉肉库", "选择最多 6 个肉肉，本关只能使用所选阵容。", "loadout")
@@ -1891,7 +2009,10 @@ class Game:
         elif self.state == "skills":
             self._draw_collection_screen("肉肉技能升级", "每个肉肉最多升级 3 次，升级效果永久保存在当前账户。", "skills")
         elif self.state == "reset_confirm":
-            self._draw_menu()
+            if self.reset_return_state == "home":
+                self._draw_home()
+            else:
+                self._draw_menu()
             self._draw_reset_overlay()
         elif self.state == "ending":
             self._draw_ending_animation()
@@ -1952,19 +2073,38 @@ class Game:
             pygame.draw.circle(self.screen, (207, 151, 62), point, 3)
             pygame.draw.circle(self.screen, (92, 61, 34), point, 3, 1)
 
+    def _draw_account_summary(self) -> None:
+        self._draw_button(self._button_rect("account"), f"账户：{self.active_account}" if self.active_account else "登录 / 新建账户", False)
+        if not self.active_account:
+            return
+        coin = pygame.transform.smoothscale(load_image("coin.png", (36, 36)), (36, 36))
+        coin_label = self.font_sm.render(str(self.coins), True, (255, 226, 111))
+        group_width = coin.get_width() + 8 + coin_label.get_width()
+        x = WIDTH - 25 - group_width
+        self.screen.blit(coin, (x, 84))
+        self.screen.blit(coin_label, (x + 44, 91))
+
+    def _draw_home(self) -> None:
+        shade = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        shade.fill((8, 7, 6, 66))
+        self.screen.blit(shade, (0, 0))
+        title = self.font_title.render("肉肉守摊大战僵尸", True, COLORS["paper"])
+        self.screen.blit(title, title.get_rect(center=(WIDTH // 2, 145)))
+        subtitle = self.font_md.render("夜市烧烤塔防 · 守住今晚最后一炉", True, (255, 196, 114))
+        self.screen.blit(subtitle, subtitle.get_rect(center=(WIDTH // 2, 205)))
+        self._draw_account_summary()
+        self._draw_button(self._button_rect("home_start"), "开始游戏", True)
+        self._draw_button(self._button_rect("home_info"), "游戏简介", False)
+        self._draw_button(self._button_rect("home_reset"), "重置数据", False)
+        account_tip = self.font_xs.render("点击右上角账户可切换或新建本地账号", True, (224, 205, 170))
+        self.screen.blit(account_tip, account_tip.get_rect(center=(WIDTH // 2, 505)))
+
     def _draw_menu(self) -> None:
         title = self.font_title.render("肉肉守摊大战僵尸", True, COLORS["paper"])
-        self.screen.blit(title, title.get_rect(center=(WIDTH // 2, 70)))
+        self.screen.blit(title, title.get_rect(center=(WIDTH // 2, 55)))
         subtitle = self.font_md.render("选择关卡 · 通关后解锁下一关", True, (255, 196, 114))
-        self.screen.blit(subtitle, subtitle.get_rect(center=(WIDTH // 2, 125)))
-        self._draw_button(self._button_rect("account"), self.active_account or "登录 / 新建账户", False)
-        if self.active_account:
-            coin = pygame.transform.smoothscale(load_image("coin.png", (36, 36)), (36, 36))
-            coin_label = self.font_sm.render(str(self.coins), True, (255, 226, 111))
-            group_width = coin.get_width() + 8 + coin_label.get_width()
-            x = WIDTH - 25 - group_width
-            self.screen.blit(coin, (x, 84))
-            self.screen.blit(coin_label, (x + 44, 91))
+        self.screen.blit(subtitle, subtitle.get_rect(center=(WIDTH // 2, 104)))
+        self._draw_account_summary()
         for index, level in enumerate(LEVELS):
             rect = self._level_rect(index)
             unlocked = level.number <= self.unlocked_level
@@ -1994,35 +2134,63 @@ class Game:
             )
             self.screen.blit(description_s, (rect.x + 14, rect.y + 64))
         self._draw_button(self._button_rect("start"), f"开始第 {self.selected_level} 关", True)
-        self._draw_button(self._button_rect("menu_info"), "游戏简介", False)
         self._draw_button(self._button_rect("menu_tuning"), f"第 {self.selected_level} 关调参", False)
         self._draw_button(self._button_rect("shop"), "肉肉商店", False)
         self._draw_button(self._button_rect("skills"), "技能升级", False)
-        self._draw_button(self._button_rect("reset_data"), "重置数据", False)
+        self._draw_button(self._button_rect("screen_back"), "返回主界面", False)
 
     def _draw_login_overlay(self) -> None:
         self._draw_modal_backdrop()
-        panel = pygame.Rect(WIDTH // 2 - 300, HEIGHT // 2 - 165, 600, 330)
+        panel = pygame.Rect(WIDTH // 2 - 380, HEIGHT // 2 - 280, 760, 560)
         pygame.draw.rect(self.screen, (42, 34, 30), panel, border_radius=8)
         pygame.draw.rect(self.screen, COLORS["gold"], panel, 3, border_radius=8)
         title = self.font_lg.render("本地账户", True, COLORS["paper"])
-        self.screen.blit(title, title.get_rect(center=(panel.centerx, panel.y + 58)))
-        note_text = "直接输入会替换原名，确认后保留该账户全部数据。" if self.login_source_account else "输入玩家名即可登录；新名字会创建独立的本地进度。"
+        self.screen.blit(title, title.get_rect(center=(panel.centerx, panel.y + 45)))
+        note_text = "输入新名称会保留原账户数据。" if self.login_source_account else "选择已有账户，或创建一个新的本地账户。"
         note = self.font_xs.render(note_text, True, (222, 204, 171))
-        self.screen.blit(note, note.get_rect(center=(panel.centerx, panel.y + 103)))
-        field = pygame.Rect(panel.x + 70, panel.y + 130, panel.width - 140, 58)
+        self.screen.blit(note, note.get_rect(center=(panel.centerx, panel.y + 84)))
+
+        section = self.font_xs.render("本地账户", True, (255, 205, 105))
+        self.screen.blit(section, (panel.x + 50, panel.y + 112))
+        account_names = self._visible_login_accounts()
+        if account_names:
+            for index, name in enumerate(account_names):
+                rect = self._login_account_rect(index)
+                selected = name == self.active_account
+                self._draw_themed_panel(rect, (76, 59, 45) if selected else (55, 49, 44), COLORS["gold"] if selected else (126, 103, 76), selected, metal=True)
+                suffix = "  当前" if selected else ""
+                label_text = self._fit_text(name + suffix, self.font_sm, rect.width - 24)
+                label = self.font_sm.render(label_text, True, COLORS["paper"])
+                self.screen.blit(label, label.get_rect(center=rect.center))
+        else:
+            empty = self.font_xs.render("暂无本地账户，请在下方创建", True, COLORS["muted"])
+            self.screen.blit(empty, empty.get_rect(center=(panel.centerx, panel.y + 205)))
+        if len(self.accounts) > 6:
+            self._draw_button(self._button_rect("login_prev"), "上一页", False)
+            self._draw_button(self._button_rect("login_next"), "下一页", False)
+        if self.active_account:
+            self._draw_button(self._button_rect("login_rename"), "重命名当前", False)
+
+        field_title = self.font_xs.render("仅限英文字母或数字，最多 12 位", True, (255, 205, 105))
+        self.screen.blit(field_title, (panel.x + 70, panel.y + 360))
+        field = pygame.Rect(panel.x + 70, panel.y + 388, panel.width - 140, 54)
         pygame.key.set_text_input_rect(field)
         pygame.draw.rect(self.screen, (27, 24, 22), field, border_radius=6)
         pygame.draw.rect(self.screen, (255, 213, 112), field, 2, border_radius=6)
         shown = self.login_text + self.login_composition + ("|" if pygame.time.get_ticks() // 500 % 2 == 0 else "")
+        if not self.login_text and not self.login_composition:
+            shown = "EnglishOrNumber" + ("|" if pygame.time.get_ticks() // 500 % 2 == 0 else "")
         label = self.font_md.render(shown, True, COLORS["paper"])
-        self.screen.blit(label, (field.x + 18, field.y + 12))
+        if not self.login_text and not self.login_composition:
+            label.set_alpha(115)
+        self.screen.blit(label, (field.x + 18, field.y + 10))
         if self.login_message:
             message = self.font_xs.render(self.login_message, True, (255, 154, 111))
-            self.screen.blit(message, message.get_rect(center=(panel.centerx, panel.y + 211)))
-        action_text = "确认修改" if self.login_source_account else "登录 / 创建"
+            self.screen.blit(message, message.get_rect(center=(panel.centerx, panel.y + 466)))
+        action_text = "确认修改" if self.login_source_account else "创建 / 登录"
         self._draw_button(self._button_rect("login_confirm"), action_text, True)
-        self._draw_button(self._button_rect("screen_back"), "返回", False)
+        if not self.login_required:
+            self._draw_button(self._button_rect("login_back"), "返回", False)
 
     def _draw_collection_screen(self, title_text: str, subtitle_text: str, mode: str) -> None:
         self._draw_background()
@@ -3016,18 +3184,20 @@ class Game:
         self.screen.blit(sub_s, sub_s.get_rect(center=(WIDTH // 2, panel.y + 118)))
 
     def _button_rect(self, name: str) -> pygame.Rect:
+        if name == "home_start":
+            return pygame.Rect(WIDTH // 2 - 180, 292, 360, 66)
+        if name == "home_info":
+            return pygame.Rect(WIDTH // 2 - 190, 388, 180, 54)
+        if name == "home_reset":
+            return pygame.Rect(WIDTH // 2 + 10, 388, 180, 54)
         if name == "start":
-            return pygame.Rect(WIDTH // 2 - 140, 446, 280, 56)
-        if name == "menu_info":
-            return pygame.Rect(WIDTH // 2 - 470, 520, 180, 52)
+            return pygame.Rect(WIDTH // 2 - 140, 462, 280, 56)
         if name == "menu_tuning":
-            return pygame.Rect(WIDTH // 2 - 270, 520, 180, 52)
+            return pygame.Rect(WIDTH // 2 - 290, 532, 180, 52)
         if name == "shop":
-            return pygame.Rect(WIDTH // 2 - 70, 520, 180, 52)
+            return pygame.Rect(WIDTH // 2 - 90, 532, 180, 52)
         if name == "skills":
-            return pygame.Rect(WIDTH // 2 + 130, 520, 180, 52)
-        if name == "reset_data":
-            return pygame.Rect(WIDTH // 2 + 330, 520, 180, 52)
+            return pygame.Rect(WIDTH // 2 + 110, 532, 180, 52)
         if name == "account":
             return pygame.Rect(WIDTH - 305, 20, 280, 48)
         if name == "pause":
@@ -3057,7 +3227,15 @@ class Game:
         if name == "exit_confirm_no":
             return pygame.Rect(WIDTH // 2 + 10, HEIGHT // 2 + 70, 220, 54)
         if name == "login_confirm":
-            return pygame.Rect(WIDTH // 2 - 110, HEIGHT // 2 + 82, 220, 52)
+            return pygame.Rect(WIDTH // 2 - 110, HEIGHT // 2 + 198, 220, 52)
+        if name == "login_back":
+            return pygame.Rect(WIDTH // 2 - 340, HEIGHT // 2 + 198, 150, 52)
+        if name == "login_rename":
+            return pygame.Rect(WIDTH // 2 + 190, HEIGHT // 2 - 258, 160, 38)
+        if name == "login_prev":
+            return pygame.Rect(WIDTH // 2 - 170, HEIGHT // 2 + 20, 130, 38)
+        if name == "login_next":
+            return pygame.Rect(WIDTH // 2 + 40, HEIGHT // 2 + 20, 130, 38)
         if name == "screen_back":
             return pygame.Rect(70, HEIGHT - 62, 150, 44)
         if name == "loadout_start":
@@ -3075,7 +3253,14 @@ class Game:
         total_width = width * columns + gap * (columns - 1)
         col = index % columns
         row = index // columns
-        return pygame.Rect((WIDTH - total_width) // 2 + col * (width + gap), 142 + row * 96, width, 88)
+        return pygame.Rect((WIDTH - total_width) // 2 + col * (width + gap), 160 + row * 96, width, 88)
+
+    def _login_account_rect(self, index: int) -> pygame.Rect:
+        panel_x = WIDTH // 2 - 380
+        panel_y = HEIGHT // 2 - 280
+        col = index % 2
+        row = index // 2
+        return pygame.Rect(panel_x + 50 + col * 335, panel_y + 136 + row * 54, 315, 44)
 
     def _unit_library_rect(self, index: int) -> pygame.Rect:
         col = index % 2

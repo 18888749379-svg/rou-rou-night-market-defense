@@ -1,0 +1,7 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "buildCommand": "python -m pip install -r requirements-web.txt && python scripts/build_web.py",
+  "outputDirectory": "build/webapp/build/web",
+  "cleanUrls": true
+}

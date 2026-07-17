@@ -1,0 +1,11 @@
+.git
+.venv
+build
+dist
+outputs
+save_data.json
+save_data.json.bak
+save_data.json.tmp
+docs
+*.md
+src/main.py

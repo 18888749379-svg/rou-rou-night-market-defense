@@ -4,7 +4,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-BASE_DIR = Path(__file__).resolve().parents[1]
+SOURCE_DIR = Path(__file__).resolve().parent
+BASE_DIR = SOURCE_DIR if (SOURCE_DIR / "assets").is_dir() else SOURCE_DIR.parent
 ASSET_DIR = BASE_DIR / "assets"
 IMAGE_DIR = ASSET_DIR / "images"
 AUDIO_DIR = ASSET_DIR / "audio"
@@ -114,7 +115,7 @@ UNITS: dict[str, UnitConfig] = {
     "charcoal": UnitConfig("charcoal", "木炭", 50, 120, 0, CHARCOAL_UNIT_COOLDOWN, "charcoal.png", "资源单位，定期生成可点击炭火。"),
     "wing": UnitConfig("wing", "烤鸡翅", 150, 120, 14, 0.55, "wing.png", "投出鸡翅骨头并回旋返程，可对同一目标造成二次伤害。"),
     "beef": UnitConfig("beef", "冰镇肥牛", 125, 100, 8, 1.1, "beef.png", "发射带冰霜轨迹的肥牛卷，命中后短暂减速僵尸。"),
-    "egg_mine": UnitConfig("egg_mine", "鸡蛋地雷", 75, 80, 180, 5.0, "egg_mine.png", "放置 5 秒后完成部署，僵尸踩中时对附近目标造成爆炸伤害。"),
+    "egg_mine": UnitConfig("egg_mine", "鸡蛋地雷", 75, 80, 200, 5.0, "egg_mine.png", "部署前仅 1 点生命；5 秒后完成部署，僵尸踩中时造成 200 点范围伤害并自毁。"),
     "scallop": UnitConfig("scallop", "蒜香扇贝", 125, 105, 24, 1.4, "scallop.png", "发射蒜蓉弹，命中后会对目标附近的僵尸造成溅射伤害。"),
     "sausage": UnitConfig("sausage", "辣椒烤肠", 175, 110, 45, 2.6, "sausage.png", "喷出穿透整行的辣椒火焰，可同时灼伤多个僵尸。"),
     "lotus": UnitConfig("lotus", "糯米藕盒", 100, 260, 0, 6.0, "lotus.png", "周期治疗上下左右相邻肉肉，每次恢复 35 点生命。"),

@@ -29,13 +29,19 @@ def main() -> None:
     with tempfile.TemporaryDirectory(prefix="rou_rou_screenshots_") as temp_dir:
         save_data.SAVE_PATH = Path(temp_dir) / "save_data.json"
         game = Game()
-        game.accounts = {"夜市摊主": game._new_account()}
-        game.active_account = "夜市摊主"
+        game.accounts = {"www": game._new_account(), "Player2": game._new_account()}
+        game.active_account = "www"
         game._load_active_account()
         game.unlocked_level = 15
         game.completed_levels = set(range(1, 12))
         game.selected_level = 12
         game.coins = 188
+        game.state = "home"
+        save_frame(game, "home.png")
+
+        game._open_login("home", None, "选择本地账户，或输入新用户名创建账户")
+        save_frame(game, "account-select.png")
+
         game.state = "menu"
         save_frame(game, "level-select.png")
 

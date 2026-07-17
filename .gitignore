@@ -12,3 +12,9 @@ Thumbs.db
 save_data.json
 save_data.json.tmp
 save_data.json.bak
+build/
+dist/
+.vercel/
+.vercel-build-cache/
+
+.vercel

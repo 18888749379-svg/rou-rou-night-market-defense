@@ -69,7 +69,7 @@ class Audio:
         }
         self.music_tracks = {
             "menu": AUDIO_DIR / "menu_music.ogg",
-            "game": AUDIO_DIR / "game_music.mp3",
+            "game": AUDIO_DIR / "game_music.ogg",
         }
         self.current_music: str | None = None
         self.sounds: dict[str, pygame.mixer.Sound] = {}
@@ -88,10 +88,10 @@ class Audio:
             files = {
                 "attack_skewer": "attack_skewer.ogg",
                 "attack_wing": "attack_wing.ogg",
-                "attack_beef": "attack_beef.wav",
+                "attack_beef": "attack_beef.ogg",
                 "attack_meatball": "attack_meatball.ogg",
-                "zombie_spawn": "zombie_spawn.mp3",
-                "final_wave": "final_wave.mp3",
+                "zombie_spawn": "zombie_spawn.ogg",
+                "final_wave": "final_wave.ogg",
             }
             for name, filename in files.items():
                 path = AUDIO_DIR / filename

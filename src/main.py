@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import asyncio
+
 from game import Game
 
 
-def main() -> None:
-    Game().run()
+async def main() -> None:
+    await Game().run_async()
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

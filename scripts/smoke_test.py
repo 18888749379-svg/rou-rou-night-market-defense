@@ -89,7 +89,27 @@ def validate_game_flow() -> None:
         game = Game()
         assert game.active_account == "recoverable"
         assert game.coins == 0 and game.unlocked_level == 1
+        assert game.state == "login" and game.login_required
+        game.login_text = "中文名"
+        game._login_or_create()
+        assert game.state == "login" and "英文字母" in game.login_message
+        game.login_text = "recoverable"
+        game._login_or_create()
+        assert game.state == "home" and game.active_account == "recoverable"
+
+        game.accounts["Second2"] = game._new_account()
+        game.accounts["Second2"]["coins"] = 77
+        game._open_login("home", None)
+        game._switch_account("Second2")
+        assert game.state == "home" and game.active_account == "Second2" and game.coins == 77
+        game._open_login("home", None)
+        game.login_text = "NewPlayer3"
+        game._login_or_create()
+        assert game.active_account == "NewPlayer3"
+        assert game.coins == 0 and game.unlocked_level == 1 and not game.completed_levels
         assert game._button_rect("close_info").bottom < 210
+        assert game._button_rect("home_start").centerx == game.screen.get_rect().centerx
+        assert game._level_rect(0).y == 160
         for level in LEVELS:
             game.selected_level = level.number
             game._apply_level_tuning(level.number)
@@ -146,6 +166,7 @@ def validate_game_flow() -> None:
 
         mine = Unit("egg_mine", 1, 3)
         assert not mine.deployed and mine.hp == EGG_MINE_DEPLOY_HP
+        assert mine.config.damage == 200 and mine.config.cooldown == 5.0
         mine.update(mine.config.cooldown - 0.1, game)
         assert not mine.deployed and mine.alive
         mine.update(0.2, game)
@@ -156,7 +177,7 @@ def validate_game_flow() -> None:
         game.enemies = [target]
         mine.update(0.01, game)
         assert mine.triggered and not mine.alive
-        assert target.hp < target.max_hp
+        assert not target.alive
 
         game.reset_game()
         game.state = "playing"
@@ -174,8 +195,10 @@ def validate_game_flow() -> None:
         game.state = "playing"
         game._open_exit_confirm()
         game._exit_to_menu()
-        assert game.state == "menu"
+        assert game.state == "home"
 
+        game.state = "home"
+        game.draw()
         game.state = "menu"
         game.draw()
         saved = save_data.load_save()
