@@ -1,8 +1,8 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": null,
-  "installCommand": "uv pip install --python \"$(command -v python)\" --link-mode=copy -r requirements-web.txt",
-  "buildCommand": "python scripts/build_web.py",
+  "installCommand": "uv venv .vercel-venv --python 3.12 && uv pip install --python .vercel-venv/bin/python --link-mode=copy -r requirements-web.txt",
+  "buildCommand": ".vercel-venv/bin/python scripts/build_web.py",
   "outputDirectory": "build/webapp/build/web",
   "cleanUrls": true
 }
