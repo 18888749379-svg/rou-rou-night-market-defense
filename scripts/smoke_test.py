@@ -15,21 +15,27 @@ import pygame
 
 import save_data
 from settings import (
+    DIFFICULTY_HARD,
+    DIFFICULTY_NORMAL,
     ENEMIES,
     ENEMY_ORDER,
     CELL_SIZE,
     EGG_MINE_DEPLOY_HP,
     ENDING_ANIMATION_DURATION,
+    GRID_ROWS,
     GRID_X,
     GRID_Y,
     IMAGE_DIR,
     LEVELS,
     LEVEL_COIN_REWARDS,
-    REVERSE_AI_SCHEDULE,
+    REVERSE_DEFENDERS_PER_LANE,
+    REVERSE_HARD_DEFENDERS_PER_LANE,
     REVERSE_ZOMBIE_COSTS,
     UNITS,
     UNIT_ORDER,
     UNIT_PLACEMENT_COOLDOWNS,
+    UNIT_UPGRADE_PATHS,
+    UPGRADE_COSTS,
 )
 
 
@@ -39,6 +45,10 @@ def validate_configuration() -> None:
     assert set(UNIT_ORDER) == set(UNITS)
     assert set(ENEMY_ORDER) == set(ENEMIES)
     assert set(UNIT_PLACEMENT_COOLDOWNS) == set(UNITS)
+    assert len(UPGRADE_COSTS) == 7
+    assert set(UNIT_UPGRADE_PATHS) == set(UNITS)
+    assert all(len(path) == 7 for path in UNIT_UPGRADE_PATHS.values())
+    assert {"giant", "boss"} <= set(REVERSE_ZOMBIE_COSTS)
     assert UNIT_PLACEMENT_COOLDOWNS["charcoal"] == 3.0
     assert UNIT_PLACEMENT_COOLDOWNS["wall"] == 15.0
     assert (IMAGE_DIR / "ending_victory.png").is_file()
@@ -107,9 +117,11 @@ def validate_game_flow() -> None:
         game._login_or_create()
         assert game.active_account == "NewPlayer3"
         assert game.coins == 0 and game.unlocked_level == 1 and not game.completed_levels
+        assert not game.hard_completed_levels and game.selected_difficulty == DIFFICULTY_NORMAL
         assert game._button_rect("close_info").bottom < 210
         assert game._button_rect("home_start").centerx == game.screen.get_rect().centerx
         assert game._level_rect(0).y == 160
+        game.selected_difficulty = DIFFICULTY_NORMAL
         for level in LEVELS:
             game.selected_level = level.number
             game._apply_level_tuning(level.number)
@@ -117,12 +129,12 @@ def validate_game_flow() -> None:
             game.state = "playing"
             if level.special == "reverse":
                 assert len(game.reverse_cards) == len(REVERSE_ZOMBIE_COSTS)
-                game.game_time = REVERSE_AI_SCHEDULE[0][0] - 2.0
-                game._update_reverse_director()
-                assert game.reverse_previews
-                game.game_time = REVERSE_AI_SCHEDULE[0][0] + 0.1
-                game._update_reverse_director()
-                assert game.units
+                assert len(game.units) == GRID_ROWS * REVERSE_DEFENDERS_PER_LANE
+                assert game.charcoal == 300
+                assert any(card.enemy_type == "boss" for card in game.reverse_cards)
+                game.game_time = 9999.0
+                game._update_reverse_outcome()
+                assert game.state == "playing"
                 before = game.charcoal
                 baby_card = next(card for card in game.reverse_cards if card.enemy_type == "baby")
                 assert game._begin_reverse_drag(baby_card.rect.center)
@@ -152,6 +164,23 @@ def validate_game_flow() -> None:
             assert game.state == "win", level.number
 
         game.selected_level = 1
+        game.selected_difficulty = DIFFICULTY_HARD
+        game._apply_level_tuning(1)
+        game.reset_game()
+        game.game_time = 1000.0
+        game._spawn_waves()
+        assert {enemy.tier for enemy in game.enemies} == {1, 2}
+        assert game.total_enemies > sum(len(wave) for _, wave in game.level_config.waves)
+
+        game.selected_level = 11
+        game._apply_level_tuning(11)
+        game.reset_game()
+        assert len(game.units) == GRID_ROWS * REVERSE_HARD_DEFENDERS_PER_LANE
+        assert game.spawn_reverse_enemy("baby", 0)
+        assert game.enemies[-1].tier == 2
+
+        game.selected_level = 1
+        game.selected_difficulty = DIFFICULTY_NORMAL
         game._apply_level_tuning(1)
         game.reset_game()
         game.state = "playing"
@@ -195,14 +224,17 @@ def validate_game_flow() -> None:
         game.state = "playing"
         game._open_exit_confirm()
         game._exit_to_menu()
-        assert game.state == "home"
+        assert game.state == "menu"
 
         game.state = "home"
         game.draw()
         game.state = "menu"
         game.draw()
         saved = save_data.load_save()
-        assert saved.get("version") == 4
+        assert saved.get("version") == 5
+        account = saved["accounts"][game.active_account]
+        assert "hard_completed_levels" in account
+        assert account["selected_difficulty"] == DIFFICULTY_NORMAL
         assert len(saved.get("level_tuning", {})) == len(LEVELS)
         pygame.quit()
 

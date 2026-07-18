@@ -39,33 +39,31 @@ MAX_OIL_CAPACITY = 6
 ENDING_ANIMATION_DURATION = 3.2
 EGG_MINE_DEPLOY_HP = 1
 
-REVERSE_STARTING_CHARCOAL = 180
-REVERSE_DURATION = 120.0
+REVERSE_STARTING_CHARCOAL = 300
 REVERSE_CORE_HP = 3
-REVERSE_HOT_INTERVAL = 18.0
-REVERSE_HOT_DURATION = 10.0
-REVERSE_RELIEF_VALUE = 35
-REVERSE_ZOMBIE_ORDER = ["baby", "normal", "courier", "pot", "drunk", "butcher"]
+REVERSE_ZOMBIE_ORDER = ["baby", "normal", "courier", "pot", "drunk", "butcher", "giant", "boss"]
 REVERSE_ZOMBIE_COSTS = {
     "baby": 35,
     "normal": 60,
-    "courier": 85,
-    "pot": 115,
-    "drunk": 135,
-    "butcher": 210,
+    "courier": 80,
+    "pot": 110,
+    "drunk": 125,
+    "butcher": 180,
+    "giant": 240,
+    "boss": 300,
 }
-REVERSE_AI_SCHEDULE: list[tuple[float, list[str]]] = [
-    (5.0, ["charcoal", "skewer"]),
-    (12.0, ["wall"]),
-    (19.0, ["skewer", "charcoal"]),
-    (27.0, ["beef", "wall"]),
-    (36.0, ["wing", "skewer"]),
-    (46.0, ["lotus", "wall", "beef"]),
-    (57.0, ["egg_mine", "scallop"]),
-    (69.0, ["sausage", "wall", "wing"]),
-    (82.0, ["egg_mine", "beef", "skewer"]),
-    (96.0, ["scallop", "sausage", "wall"]),
-]
+REVERSE_DEFENDER_POOL = ["charcoal", "skewer", "wall", "wing", "beef", "scallop", "sausage", "lotus"]
+REVERSE_DEFENDERS_PER_LANE = 4
+REVERSE_HARD_DEFENDERS_PER_LANE = 5
+
+DIFFICULTY_NORMAL = "normal"
+DIFFICULTY_HARD = "hard"
+HARD_REWARD_MULTIPLIER = 1.8
+TIER_TWO_HP_MULTIPLIER = 1.55
+TIER_TWO_DAMAGE_MULTIPLIER = 1.35
+TIER_TWO_SPEED_MULTIPLIER = 1.18
+TIER_TWO_REWARD_MULTIPLIER = 1.5
+LATE_GAME_TIER_START_LEVEL = 11
 
 
 @dataclass
@@ -148,8 +146,102 @@ UNIT_COIN_PRICES = {
     "sausage": 80,
 }
 LEVEL_COIN_REWARDS = [20, 30, 45, 65, 90, 120, 150, 190, 240, 350, 450, 560, 700, 850, 1200]
-UPGRADE_COSTS = [10, 20, 35]
+UPGRADE_COSTS = [10, 20, 35, 60, 90, 130, 180]
 MAX_LOADOUT_SIZE = 6
+
+# Each path contains seven cumulative multipliers tailored to the unit's role.
+UNIT_UPGRADE_PATHS: dict[str, list[tuple[str, float, str]]] = {
+    "charcoal": [
+        ("cost", 0.95, "费用 -5%"),
+        ("cooldown", 0.90, "产炭间隔 -10%"),
+        ("hp", 1.20, "生命 +20%"),
+        ("cooldown", 0.88, "产炭间隔再 -12%"),
+        ("cost", 0.92, "费用再 -8%"),
+        ("hp", 1.25, "生命再 +25%"),
+        ("cooldown", 0.85, "旺火间隔再 -15%"),
+    ],
+    "wall": [
+        ("cost", 0.95, "费用 -5%"),
+        ("hp", 1.18, "生命 +18%"),
+        ("hp", 1.20, "生命再 +20%"),
+        ("cost", 0.92, "费用再 -8%"),
+        ("hp", 1.22, "生命再 +22%"),
+        ("hp", 1.25, "生命再 +25%"),
+        ("hp", 1.30, "终极厚切：生命 +30%"),
+    ],
+    "egg_mine": [
+        ("cost", 0.95, "费用 -5%"),
+        ("cooldown", 0.90, "部署时间 -10%"),
+        ("damage", 1.15, "爆炸伤害 +15%"),
+        ("cooldown", 0.85, "部署时间再 -15%"),
+        ("damage", 1.20, "爆炸伤害再 +20%"),
+        ("hp", 1.30, "部署后生命 +30%"),
+        ("damage", 1.25, "终极爆破：伤害 +25%"),
+    ],
+    "skewer": [
+        ("cost", 0.95, "费用 -5%"),
+        ("cooldown", 0.90, "射击间隔 -10%"),
+        ("damage", 1.15, "羊肉块伤害 +15%"),
+        ("cooldown", 0.88, "射击间隔再 -12%"),
+        ("damage", 1.18, "羊肉块伤害再 +18%"),
+        ("hp", 1.20, "生命 +20%"),
+        ("damage", 1.25, "终极火候：伤害 +25%"),
+    ],
+    "lotus": [
+        ("cost", 0.95, "费用 -5%"),
+        ("cooldown", 0.90, "治疗间隔 -10%"),
+        ("hp", 1.20, "生命 +20%"),
+        ("cooldown", 0.85, "治疗间隔再 -15%"),
+        ("hp", 1.22, "生命再 +22%"),
+        ("cost", 0.92, "费用再 -8%"),
+        ("cooldown", 0.82, "终极治愈：间隔 -18%"),
+    ],
+    "meatball": [
+        ("cost", 0.95, "费用 -5%"),
+        ("cooldown", 0.90, "引爆时间 -10%"),
+        ("damage", 1.18, "爆汁伤害 +18%"),
+        ("damage", 1.20, "爆汁伤害再 +20%"),
+        ("cost", 0.92, "费用再 -8%"),
+        ("hp", 1.30, "引爆前生命 +30%"),
+        ("damage", 1.30, "终极爆汁：伤害 +30%"),
+    ],
+    "beef": [
+        ("cost", 0.95, "费用 -5%"),
+        ("cooldown", 0.90, "投射间隔 -10%"),
+        ("damage", 1.15, "肥牛伤害 +15%"),
+        ("cooldown", 0.88, "投射间隔再 -12%"),
+        ("hp", 1.20, "生命 +20%"),
+        ("damage", 1.18, "肥牛伤害再 +18%"),
+        ("cooldown", 0.82, "极寒连射：间隔 -18%"),
+    ],
+    "scallop": [
+        ("cost", 0.95, "费用 -5%"),
+        ("damage", 1.15, "蒜蓉伤害 +15%"),
+        ("cooldown", 0.90, "投射间隔 -10%"),
+        ("damage", 1.18, "溅射伤害再 +18%"),
+        ("hp", 1.20, "生命 +20%"),
+        ("cooldown", 0.85, "投射间隔再 -15%"),
+        ("damage", 1.25, "满盘蒜香：伤害 +25%"),
+    ],
+    "wing": [
+        ("cost", 0.95, "费用 -5%"),
+        ("cooldown", 0.90, "回旋间隔 -10%"),
+        ("damage", 1.15, "骨头伤害 +15%"),
+        ("cooldown", 0.88, "回旋间隔再 -12%"),
+        ("damage", 1.18, "往返伤害再 +18%"),
+        ("hp", 1.20, "生命 +20%"),
+        ("cooldown", 0.82, "终极回旋：间隔 -18%"),
+    ],
+    "sausage": [
+        ("cost", 0.95, "费用 -5%"),
+        ("damage", 1.18, "火焰伤害 +18%"),
+        ("cooldown", 0.90, "喷火间隔 -10%"),
+        ("damage", 1.20, "穿透伤害再 +20%"),
+        ("hp", 1.20, "生命 +20%"),
+        ("cooldown", 0.85, "喷火间隔再 -15%"),
+        ("damage", 1.28, "烈焰整路：伤害 +28%"),
+    ],
+}
 
 ENEMIES: dict[str, EnemyConfig] = {
     "normal": EnemyConfig("normal", "食客僵尸", 110, 34.0, 20, 1.0, 15, "zombie_normal.png", "基础敌人，生命与速度均衡。"),
@@ -237,7 +329,7 @@ LEVELS: list[LevelConfig] = [
         (59.0, ["giant", "giant", "butcher", "drunk", "courier", "pot"]),
         (72.0, ["boss", "giant", "butcher", "pot", "drunk", "courier", "normal"]),
     ], 2),
-    LevelConfig(11, "僵尸夜宵突袭", "反向购买并拖放僵尸，吃掉系统肉肉后摧毁烤炉。", [], 0, "reverse"),
+    LevelConfig(11, "僵尸夜宵突袭", "固定随机肉肉防线；用有限军费买僵尸，吃肉返炭并三次突破烤炉。", [], 0, "reverse"),
     LevelConfig(12, "满巷催单", "完成限时肉肉订单赚取炭火，超时会提前引来下一波。", [
         (8.0, ["baby", "courier"]), (13.0, ["courier", "courier", "normal"]),
         (19.0, ["baby", "drunk", "courier", "normal"]),

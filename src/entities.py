@@ -14,6 +14,10 @@ from settings import (
     GRID_X,
     GRID_Y,
     SPAWN_X,
+    TIER_TWO_DAMAGE_MULTIPLIER,
+    TIER_TWO_HP_MULTIPLIER,
+    TIER_TWO_REWARD_MULTIPLIER,
+    TIER_TWO_SPEED_MULTIPLIER,
     UNITS,
 )
 
@@ -129,7 +133,7 @@ class Unit:
                 self.row,
                 self.rect.right - 4,
                 self.rect.centery - 14,
-                self.config.damage,
+                int(round(self.config.damage * self.damage_multiplier)),
                 image_name,
                 slow_seconds,
                 boomerang,
@@ -206,7 +210,7 @@ class Unit:
         self.triggered = True
         for enemy in game.enemies:
             if enemy.alive and enemy.row == self.row and abs(enemy.x - self.rect.centerx) <= CELL_SIZE * 1.45:
-                enemy.take_damage(self.config.damage, game)
+                enemy.take_damage(int(round(self.config.damage * self.damage_multiplier)), game)
         game.effects.append(Explosion(self.rect.centerx, self.rect.centery))
         game.trigger_shake(4, 0.18)
         game.floaters.append(FloatingText("鸡蛋爆破!", self.rect.centerx, self.rect.top - 8, (255, 219, 105), 0.8))
@@ -225,7 +229,7 @@ class Unit:
         end_x = min(SPAWN_X + 30, self.rect.centerx + CELL_SIZE * 5.3)
         for enemy in targets:
             if enemy.x <= end_x:
-                enemy.take_damage(self.config.damage, game)
+                enemy.take_damage(int(round(self.config.damage * self.damage_multiplier)), game)
         game.effects.append(FlameWave(self.rect.right, self.rect.centery, end_x))
         self.cooldown = self.config.cooldown
         game.audio.play("attack_meatball")
@@ -322,14 +326,22 @@ class Unit:
 
 
 class Enemy:
-    def __init__(self, enemy_type: str, row: int, offset: float = 0.0) -> None:
+    def __init__(self, enemy_type: str, row: int, offset: float = 0.0, tier: int = 1) -> None:
         self.config = ENEMIES[enemy_type]
         self.enemy_type = enemy_type
+        self.tier = 2 if tier >= 2 else 1
         self.row = row
         self.x = SPAWN_X + offset
         self.y = row_center(row) + 10
-        self.max_hp = self.config.hp
-        self.hp = self.config.hp
+        hp_multiplier = TIER_TWO_HP_MULTIPLIER if self.tier == 2 else 1.0
+        damage_multiplier = TIER_TWO_DAMAGE_MULTIPLIER if self.tier == 2 else 1.0
+        speed_multiplier = TIER_TWO_SPEED_MULTIPLIER if self.tier == 2 else 1.0
+        reward_multiplier = TIER_TWO_REWARD_MULTIPLIER if self.tier == 2 else 1.0
+        self.max_hp = max(1, int(round(self.config.hp * hp_multiplier)))
+        self.hp = self.max_hp
+        self.attack_damage = max(0, int(round(self.config.damage * damage_multiplier)))
+        self.move_speed = self.config.speed * speed_multiplier
+        self.reward = max(0, int(round(self.config.reward * reward_multiplier)))
         self.attack_timer = 0.0
         self.slow_timer = 0.0
         self.animation_time = 0.0
@@ -367,16 +379,16 @@ class Enemy:
             if self.attack_timer <= 0:
                 target = self.target
                 was_alive = target.alive
-                target.take_damage(self.config.damage)
+                target.take_damage(self.attack_damage)
                 game.effects.append(ImpactBurst(target.rect.centerx, target.rect.centery, "grease"))
-                if self.config.damage >= 50:
+                if self.attack_damage >= 50:
                     game.trigger_shake(2, 0.10)
                 if was_alive and not target.alive:
                     game.on_unit_eaten(target, self)
                 self.attack_timer = self.config.cooldown
                 game.audio.play("hit")
         elif not blocked_by_enemy:
-            speed = self.config.speed * (0.48 if self.slow_timer > 0 else 1.0)
+            speed = self.move_speed * (0.48 if self.slow_timer > 0 else 1.0)
             self.x -= speed * dt
         self.rect.center = (int(self.x), int(self.y))
 
@@ -407,8 +419,8 @@ class Enemy:
             if game.is_reverse_mode:
                 game.on_reverse_enemy_lost(self)
             else:
-                game.floaters.append(FloatingText(f"+{self.config.reward}", self.x, self.y, (255, 189, 71), 0.7))
-                game.add_charcoal_auto(self.config.reward, self.x, self.y - 18)
+                game.floaters.append(FloatingText(f"+{self.reward}", self.x, self.y, (255, 189, 71), 0.7))
+                game.add_charcoal_auto(self.reward, self.x, self.y - 18)
 
     def apply_slow(self, seconds: float) -> None:
         self.slow_timer = max(self.slow_timer, seconds)
@@ -426,6 +438,12 @@ class Enemy:
             frost = pygame.Surface((self.rect.width + 18, self.rect.height + 12), pygame.SRCALPHA)
             pygame.draw.ellipse(frost, (118, 226, 255, 150), frost.get_rect(), 3)
             surface.blit(frost, frost.get_rect(center=self.rect.center))
+        if self.tier == 2:
+            badge = pygame.Rect(self.rect.right - 20, self.rect.top - 25, 22, 20)
+            pygame.draw.rect(surface, (128, 35, 28), badge, border_radius=5)
+            pygame.draw.rect(surface, (255, 186, 72), badge, 1, border_radius=5)
+            for x in (badge.centerx - 3, badge.centerx + 3):
+                pygame.draw.line(surface, (255, 237, 188), (x, badge.y + 5), (x, badge.bottom - 5), 2)
         self._draw_hp(surface)
 
     def _draw_hp(self, surface: pygame.Surface) -> None:
