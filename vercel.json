@@ -1,7 +1,7 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": null,
-  "installCommand": "uv pip install --system -r requirements-web.txt",
+  "installCommand": "uv pip install --python \"$(command -v python)\" --link-mode=copy -r requirements-web.txt",
   "buildCommand": "python scripts/build_web.py",
   "outputDirectory": "build/webapp/build/web",
   "cleanUrls": true
