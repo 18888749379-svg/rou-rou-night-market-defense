@@ -22,6 +22,7 @@ from settings import (
     CELL_SIZE,
     EGG_MINE_DEPLOY_HP,
     ENDING_ANIMATION_DURATION,
+    FONT_DIR,
     GRID_ROWS,
     GRID_X,
     GRID_Y,
@@ -52,6 +53,7 @@ def validate_configuration() -> None:
     assert UNIT_PLACEMENT_COOLDOWNS["charcoal"] == 3.0
     assert UNIT_PLACEMENT_COOLDOWNS["wall"] == 15.0
     assert (IMAGE_DIR / "ending_victory.png").is_file()
+    assert (FONT_DIR / "NotoSansSC-GameSubset.ttf").is_file()
     assert (IMAGE_DIR / "ending_defeat.png").is_file()
 
     for config in (*UNITS.values(), *ENEMIES.values()):

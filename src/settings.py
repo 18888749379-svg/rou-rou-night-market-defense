@@ -9,6 +9,7 @@ BASE_DIR = SOURCE_DIR if (SOURCE_DIR / "assets").is_dir() else SOURCE_DIR.parent
 ASSET_DIR = BASE_DIR / "assets"
 IMAGE_DIR = ASSET_DIR / "images"
 AUDIO_DIR = ASSET_DIR / "audio"
+FONT_DIR = ASSET_DIR / "fonts"
 
 WIDTH = 1600
 HEIGHT = 720

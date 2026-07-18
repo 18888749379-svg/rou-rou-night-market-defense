@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pygame
 
-from settings import AUDIO_DIR, IMAGE_DIR
+from settings import AUDIO_DIR, FONT_DIR, IMAGE_DIR
 
 
 _FONT_CACHE: dict[tuple[int, bool], pygame.font.Font] = {}
@@ -19,6 +19,7 @@ def get_font(size: int, bold: bool = False) -> pygame.font.Font:
     if cached is not None:
         return cached
     font_paths = [
+        FONT_DIR / "NotoSansSC-GameSubset.ttf",
         Path("C:/Windows/Fonts/msyhbd.ttc" if bold else "C:/Windows/Fonts/msyh.ttc"),
         Path("C:/Windows/Fonts/simhei.ttf"),
         Path("C:/Windows/Fonts/simsun.ttc"),
@@ -27,6 +28,8 @@ def get_font(size: int, bold: bool = False) -> pygame.font.Font:
     for path in font_paths:
         if path.exists():
             font = pygame.font.Font(str(path), size)
+            if bold and path.parent == FONT_DIR:
+                font.set_bold(True)
             _FONT_CACHE[cache_key] = font
             return font
     font = pygame.font.Font(None, size)

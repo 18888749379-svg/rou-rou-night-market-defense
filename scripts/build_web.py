@@ -9,6 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 STAGING = ROOT / "build" / "webapp"
 OUTPUT = STAGING / "build" / "web"
+PYGBAG_CDN = "https://pygame-web.github.io/archives/0.9/"
 
 
 def prepare_staging() -> None:
@@ -28,13 +29,15 @@ def prepare_staging() -> None:
 def main() -> None:
     prepare_staging()
     subprocess.run(
-        [sys.executable, "-m", "pygbag", "--build", str(STAGING)],
+        [sys.executable, "-m", "pygbag", "--build", "--cdn", PYGBAG_CDN, str(STAGING)],
         cwd=ROOT,
         check=True,
     )
     index = OUTPUT / "index.html"
     if not index.is_file():
         raise RuntimeError(f"Pygbag did not create {index}")
+    if PYGBAG_CDN not in index.read_text(encoding="utf-8"):
+        raise RuntimeError(f"Pygbag output does not use the expected CDN: {PYGBAG_CDN}")
     print(f"Web build written to: {OUTPUT}")
 
 
