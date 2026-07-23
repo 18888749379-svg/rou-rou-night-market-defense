@@ -7,10 +7,13 @@
 > 作者：`www`
 > 当前版本：15 关双难度 MVP
 > 技术栈：Python 3.10+、Pygame 2.6.1、Pygbag、Vercel
+> 官方在线体验：**[https://lejiazhibo.asia](https://lejiazhibo.asia)**
 
 ## 在线试玩
 
-**Vercel：<https://rou-rou-night-market-defense.vercel.app>**
+**官方入口：[https://lejiazhibo.asia](https://lejiazhibo.asia)**
+
+备用入口：<https://rou-rou-night-market-defense.vercel.app>
 
 首次打开需要等待游戏资源加载，然后点击页面启动。网页版账户与进度保存在当前浏览器本地，不会上传到服务器，也不会自动同步到其他设备或浏览器。
 
@@ -238,7 +241,8 @@ python scripts/smoke_test.py
 - 桌面版：`python src/main.py`
 - 网页构建：`python scripts/build_web.py`
 - Vercel 部署：仓库根目录已提供 `vercel.json`
-- 在线试玩：<https://rou-rou-night-market-defense.vercel.app>
+- 官方在线试玩：<https://lejiazhibo.asia>
+- Vercel 备用入口：<https://rou-rou-night-market-defense.vercel.app>
 
 ## 参考
 
